@@ -90,14 +90,28 @@ Three layers, mirroring the existing send/messages flow.
   Start with (1); it matches how the app already does raw writes
   (`write("[2J…")`).
 
-## Stage 0 — capture spike (do first, before any stage)
+## Stage 0 — capture spike — DONE (resolved)
 
-Prove, in a standalone script, that we can capture *only* a specific KakaoTalk
-image bubble's pixels (by window-id capture + crop, or region capture) into a
-valid PNG, without bringing KakaoTalk to the front and without capturing other
-windows. Confirm Screen Recording permission behavior. If window-capture is not
-viable, fall back to region capture with KakaoTalk raised (accept a brief flash).
-Output: a decision on the exact capture command, recorded back in this doc.
+Verified in the real GUI environment (Claude Code session, which has
+Accessibility + Screen Recording). Region capture of a specific bubble works:
+
+1. Find the target image bubble's `AXImage` (reuse the `messages()` /
+   `mediaMarker` row walk). Read its screen rect via `AXPosition` + `AXSize`
+   (points, top-left origin).
+2. Raise the chat window (`AXRaise` + `NSRunningApplication.activate()`, ~500ms
+   settle) so the bubble is not occluded by the terminal.
+3. `/usr/sbin/screencapture -x -R "<x>,<y>,<w>,<h>" -o <tmp>.png`
+   (`-x` silent, `-R` region, `-o` no shadow). On a Retina display the PNG is 2x
+   the point size (a 212x132pt bubble → 424x264px), and the file carries real
+   image content (~57KB, not a blank frame). Confirmed on a real photo bubble.
+
+Notes:
+- Region capture requires the bubble on screen and KakaoTalk raised (a brief
+  focus flash). Window-id capture (`screencapture -l <CGWindowID>`) + crop could
+  avoid the flash later, but region capture is proven and is the baseline.
+- **This step cannot be verified inside the Codex sandbox** (no display access:
+  `screencapture` reports "does not intersect any displays"). Runtime GUI
+  verification is done by the coordinator, not Codex.
 
 ## Stage 1 — `/preview` most recent image
 
