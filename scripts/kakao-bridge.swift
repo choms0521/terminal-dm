@@ -535,23 +535,33 @@ final class KakaoAccessibility {
     // The paste keystroke only reaches KakaoTalk while it is frontmost, and its
     // file-transfer dialog cancels itself once the app loses focus. So raise the
     // chat window, paste, confirm the transfer, then restore the prior app.
+    // KakaoTalk sometimes opens the transfer dialog slowly, or drops the first
+    // paste before focus has settled, so re-focus and re-paste across a few
+    // attempts before giving up.
     let previousApplication = NSWorkspace.shared.frontmostApplication
     let application = try runningApplication
-    _ = AXUIElementPerformAction(chatWindow, kAXRaiseAction as CFString)
-    try? setAttribute(chatWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
-    try? setAttribute(chatWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-    application.activate()
-    usleep(300_000)
-    try? setAttribute(input, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-    usleep(150_000)
-    postCommandV()
 
-    let openDeadline = Date().addingTimeInterval(3)
+    func focusChatAndPaste() {
+      _ = AXUIElementPerformAction(chatWindow, kAXRaiseAction as CFString)
+      try? setAttribute(chatWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
+      try? setAttribute(chatWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+      application.activate()
+      usleep(300_000)
+      try? setAttribute(input, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+      usleep(150_000)
+      postCommandV()
+    }
+
     var confirmButton: AXUIElement?
-    repeat {
-      if let button = fileSendButton(in: chatWindow) { confirmButton = button; break }
-      usleep(100_000)
-    } while Date() < openDeadline
+    for _ in 0..<3 {
+      focusChatAndPaste()
+      let attemptDeadline = Date().addingTimeInterval(2.5)
+      repeat {
+        if let button = fileSendButton(in: chatWindow) { confirmButton = button; break }
+        usleep(100_000)
+      } while Date() < attemptDeadline
+      if confirmButton != nil { break }
+    }
 
     guard let confirmButton else {
       if let cancel = descendants(of: chatWindow, matching: kAXButtonRole as String).first(where: { title(of: $0) == "취소" }) {
