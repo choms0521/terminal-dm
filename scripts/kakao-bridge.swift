@@ -394,12 +394,21 @@ final class KakaoAccessibility {
       !(stringAttribute($0, kAXValueAttribute as CFString) ?? "")
         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    let photo = hasNestedText ? nil : descendants(of: cell, matching: kAXImageRole as String).first(where: {
+    let image = hasNestedText ? nil : descendants(of: cell, matching: kAXImageRole as String).first(where: {
       let s = size(of: $0) ?? .zero
       return s.width >= 60 && s.height >= 60
     })
-    if let photo {
-      return ("(사진)", "image", photo)
+    if let image {
+      // A photo bubble carries a "공유" (Share) button; a sticker / large
+      // emoticon is a bare image with no such button. (Videos are exposed
+      // identically to photos, so they are reported as photos.)
+      let hasShareButton = buttons.contains {
+        let described = stringAttribute($0, kAXDescriptionAttribute as CFString) ?? ""
+        let label = (described.isEmpty ? title(of: $0) : described)
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        return label == "공유"
+      }
+      return hasShareButton ? ("(사진)", "image", image) : ("(이모티콘)", "sticker", image)
     }
 
     return nil
