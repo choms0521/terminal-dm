@@ -9,6 +9,8 @@ import type { ChatConnector, ChatSnapshot, Conversation } from "../domain.js";
 import { formatMessagePreview, formatMessageText } from "../message-content.js";
 import { APP_VERSION } from "../version.js";
 import { getMessageWindow, getOlderMessageOffset } from "./message-window.js";
+import { getSelectedImageSelector, retainMessageSelection } from "./message-selection.js";
+import { getTerminalImageCapability, renderImagePreview } from "./terminal-image.js";
 import {
   filterSlashCommands,
   findSlashCommand,
@@ -91,19 +93,26 @@ export function App({
   onLanguageChange,
   onUpdate,
 }: AppProps) {
-  const { exit, suspendTerminal } = useApp();
+  const { exit, suspendTerminal, waitUntilRenderFlush } = useApp();
   const { stdout, write } = useStdout();
   const terminalSize = useTerminalSize(stdout);
   const [snapshot, setSnapshot] = useState(connector.getSnapshot());
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [messageSelection, setMessageSelection] = useState(false);
+  const previewInProgress = useRef(false);
+  const selectionState = useRef({ active: false, index: 0, messages: snapshot.messages });
+  selectionState.current = { active: messageSelection, index: selectedIndex, messages: snapshot.messages };
   const [commandIndex, setCommandIndex] = useState(0);
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
   const [conversationProvider, setConversationProvider] = useState<ConversationProvider>("instagram");
   const [viewMode, setViewMode] = useState<ViewMode>("chat");
+  const selectingMessages = messageSelection && viewMode === "history";
+  selectionState.current.active = selectingMessages;
   const [input, setInput] = useState("");
   const [inputEpoch, setInputEpoch] = useState(0);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [previewNotice, setPreviewNotice] = useState<string>();
   const [updateInstalled, setUpdateInstalled] = useState(false);
   const [messagesHidden, setMessagesHidden] = useState(false);
   const [workspaceCleared, setWorkspaceCleared] = useState(false);
@@ -169,13 +178,14 @@ export function App({
   // must not reserve another terminal row or the footer leaves a blank line.
   const baseChromeRows = viewMode === "history" ? 5 : 6;
   const commandChromeRows = viewMode === "history" ? 8 : 9;
+  const noticeRows = previewNotice ? wrapTerminalLines(previewNotice, Math.max(1, terminalSize.columns - 2)).length : 0;
   const mainHeight = Math.max(
     6,
     terminalSize.rows -
       (commandMode
         ? commandWindowSize + commandChromeRows + pathFooterReservedRows
         : baseChromeRows + pathFooterReservedRows) -
-      staticHeaderRows,
+      staticHeaderRows - noticeRows,
   );
   const visibleMessageCount = Math.max(1, mainHeight - 4);
   const messageContentWidth = Math.max(1, terminalSize.columns - 2);
@@ -227,6 +237,7 @@ export function App({
       visibleMessageCount,
     ],
   );
+  const selectedMessageWindow = getSelectionWindow(snapshot.messages, selectedIndex, visibleMessageCount);
   const commandWindow = useMemo(
     () => getSelectionWindow(commandMatches, commandIndex, commandWindowSize),
     [commandIndex, commandMatches, commandWindowSize],
@@ -281,6 +292,9 @@ export function App({
 
   useEffect(() => {
     const onSnapshot = (next: ChatSnapshot) => {
+      if (selectionState.current.active) {
+        setSelectedIndex(retainMessageSelection(selectionState.current.messages, next.messages, selectionState.current.index));
+      }
       // A terminal Static transcript can only append. Older messages belong in the
       // interactive history viewport; committing them here would put old data below new data.
       if (olderLoadInProgress.current) {
@@ -383,8 +397,9 @@ export function App({
   }, [input]);
 
   useEffect(() => {
+    if (selectingMessages) return;
     setSelectedIndex((index) => Math.min(index, Math.max(0, conversations.length - 1)));
-  }, [conversations.length]);
+  }, [conversations.length, selectingMessages]);
 
   useEffect(() => {
     setMessageOffset((offset) => Math.min(offset, messageWindow.maxOffset));
@@ -392,6 +407,8 @@ export function App({
 
   useEffect(() => {
     setMessageOffset(0);
+    setMessageSelection(false);
+    setPreviewNotice(undefined);
   }, [snapshot.activeConversationId]);
 
   const showError = (next: unknown): void => {
@@ -551,10 +568,14 @@ export function App({
       return;
     }
     if (key.escape) {
+      setPreviewNotice(undefined);
       if (commandMode) {
         leaveCommandScreenImmediately();
         setInput("");
         setNotice(copy.paletteClosed);
+      } else if (selectingMessages) {
+        setMessageSelection(false);
+        setNotice(copy.historyNotice);
       } else if (viewMode === "effort") {
         setViewMode("model");
         setNotice(undefined);
@@ -591,6 +612,17 @@ export function App({
         }
       }
       return;
+    }
+    if (previewInProgress.current) return;
+    if (viewMode === "history" && messageSelection && !input) {
+      if (key.upArrow || key.downArrow) {
+        setSelectedIndex((index) => wrapSelectionIndex(index, key.upArrow ? -1 : 1, snapshot.messages.length));
+        return;
+      }
+      if (key.return) {
+        void previewImage().catch(showError);
+        return;
+      }
     }
     if (viewMode === "theme" && key.upArrow) {
       setThemeIndex((index) => wrapSelectionIndex(index, -1, UI_THEMES.length));
@@ -735,7 +767,7 @@ export function App({
     ? 3 + Math.max(1, commandWindow.items.length)
     : 0;
   const chatChromeRows =
-    4 + footerRows + commandPanelRows + (error ? 1 : 0);
+    4 + footerRows + commandPanelRows + (error ? 1 : 0) + noticeRows;
   const chatSpacerHeight = Math.max(
     0,
     terminalSize.rows -
@@ -816,8 +848,92 @@ export function App({
     }
   };
 
+  const previewImage = async (latest = false): Promise<void> => {
+    if (previewInProgress.current) return;
+    if (!snapshot.activeConversationId || workspaceCleared) {
+      setPreviewNotice(copy.chooseConversationFirst);
+      return;
+    }
+    if (!stdout.isTTY || getTerminalImageCapability(process.env) !== "kitty") {
+      setPreviewNotice(copy.previewTerminalUnsupported);
+      return;
+    }
+    if (!connector.previewImage) {
+      setPreviewNotice(copy.previewUnsupported);
+      return;
+    }
+    const selector = selectingMessages && !latest
+      ? getSelectedImageSelector(snapshot.messages, selectedIndex) : "latest";
+    if (selector === undefined) {
+      const kind = snapshot.messages[selectedIndex]?.kind;
+      setPreviewNotice(kind === "image" || kind === "sticker" ? copy.previewNotVisible : copy.previewSelectImage);
+      return;
+    }
+    previewInProgress.current = true;
+    setPreviewNotice(copy.previewCapturing);
+    try {
+      const result = await connector.previewImage(selector);
+      if ("unavailable" in result) {
+        const notices: Record<string, string> = {
+          "no-image": copy.previewNoImage,
+          "not-visible": copy.previewNotVisible,
+          "permission-denied": copy.previewPermission,
+          "connector-unsupported": copy.previewUnsupported,
+          "no-conversation": copy.chooseConversationFirst,
+          "invalid-selector": copy.previewSelectImage,
+          busy: copy.previewBusy,
+        };
+        setPreviewNotice(notices[result.unavailable] ?? copy.previewFailed);
+        return;
+      }
+      await renderImagePreview(result, Math.max(1, Math.min(40, terminalSize.columns - 2)),
+        Math.max(1, terminalSize.rows - 8), async (sequence) => {
+          // Reset Ink's cached alternate frame before restoring the transcript.
+          // Its write helper appends graphics and restores the live frame below.
+          if (historyAlternateScreen.current || commandAlternateScreen.current) {
+            await suspendTerminal(async () => {
+              leaveHistoryScreenImmediately();
+              leaveCommandScreenImmediately();
+              setMessageSelection(false);
+              setViewMode("chat");
+              await nextRenderTurn();
+            });
+          } else {
+            setMessageSelection(false);
+            setViewMode("chat");
+          }
+          await nextRenderTurn();
+          await waitUntilRenderFlush();
+          write(sequence);
+        });
+      setPreviewNotice(copy.previewShown);
+    } catch {
+      setPreviewNotice(copy.previewFailed);
+    } finally {
+      previewInProgress.current = false;
+    }
+  };
+
   const executeCommand = async (command: SlashCommand, args: string[]): Promise<void> => {
     switch (command.name) {
+      case "preview":
+        if (args.length > 1 || (args[0] && args[0] !== "select" && args[0] !== "latest")) {
+          setPreviewNotice(copy.previewUsage);
+          return;
+        }
+        if (args[0] === "select") {
+          if (!snapshot.activeConversationId || workspaceCleared) {
+            setPreviewNotice(copy.chooseConversationFirst);
+            return;
+          }
+          setSelectedIndex(Math.max(0, snapshot.messages.length - 1));
+          setMessageSelection(true);
+          enterHistoryScreen();
+          setPreviewNotice(copy.previewSelectionKeys);
+          return;
+        }
+        await previewImage(args[0] === "latest");
+        return;
       case "help":
         setNotice(
           slashCommands.map((item) => item.usage).join(" · ") +
@@ -968,6 +1084,7 @@ export function App({
   };
 
   const submit = (value: string): void => {
+    if (previewInProgress.current) return;
     const parsed = parseSubmission(value);
     if (parsed.kind === "empty") return;
 
@@ -1097,7 +1214,17 @@ export function App({
               <Text bold color={theme.path}>{activePath}</Text>
               <Text color={theme.muted}> · history</Text>
             </Text>
-            {messageWindow.items.length === 0 ? (
+            {selectingMessages ? (
+              selectedMessageWindow.items.length === 0 ? <Text color={theme.muted}>{copy.noMessages}</Text> :
+              selectedMessageWindow.items.map((message, index) => {
+                const selected = selectedMessageWindow.start + index === selectedIndex;
+                return (
+                  <Text key={message.id} color={selected ? theme.accent : undefined} bold={selected}>
+                    {truncateToWidth(`${selected ? ">" : " "} ${message.sender}: ${formatMessageText(message, language).replaceAll("\n", " ")}`, conversationContentWidth)}
+                  </Text>
+                );
+              })
+            ) : messageWindow.items.length === 0 ? (
               <Text color={theme.muted}>{copy.noMessages}</Text>
             ) : (
               messageWindow.items.map((message) => {
@@ -1141,7 +1268,7 @@ export function App({
               <Text color={theme.muted}>
                 {loadingOlder
                   ? copy.loadingOlder
-                  : copy.historyKeys}
+                  : selectingMessages ? copy.previewSelectionKeys : copy.historyKeys}
               </Text>
             </Box>
           </Box>
@@ -1424,6 +1551,7 @@ export function App({
         </Text>
       )}
       {error && <Text color={theme.danger}>error: {error}</Text>}
+      {previewNotice && <Text color={theme.muted} wrap="wrap">{previewNotice}</Text>}
       </Box>
     </>
   );

@@ -5,6 +5,8 @@ import type {
   ChatSnapshot,
   ConnectorStatus,
   Conversation,
+  ImagePreviewSelector,
+  ImagePreviewResult,
 } from "../domain.js";
 
 export interface ConnectorEntry {
@@ -71,6 +73,12 @@ export class UnifiedChatConnector extends EventEmitter implements ChatConnector 
     const { connector } = this.requireActive();
     if (!connector.sendFile) throw new Error("이 connector는 파일 전송을 지원하지 않습니다.");
     await connector.sendFile(paths);
+  }
+
+  public async previewImage(selector: ImagePreviewSelector): Promise<ImagePreviewResult> {
+    const { connector } = this.requireActive();
+    if (!connector.previewImage) return { unavailable: "connector-unsupported" };
+    return connector.previewImage(selector);
   }
 
   public async loadOlderMessages(): Promise<number> {

@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { rm } from "node:fs/promises";
 import { promisify } from "node:util";
 
-import type { ChatConnector, ChatMessage, ChatSnapshot, Conversation } from "../domain.js";
+import type { ChatConnector, ChatMessage, ChatSnapshot, Conversation, ImagePreviewSelector, ImagePreviewResult } from "../domain.js";
 import { mergeMessageWindows, normalizeMessage, type RawMessage } from "./instagram-dom.js";
 import { KakaoNativeBridge } from "./kakao-native-bridge.js";
 
@@ -27,6 +28,11 @@ interface NativeSendResult {
   confirmed: boolean;
 }
 
+interface NativeMessage extends RawMessage {
+  previewIndex?: string;
+  previewImageCount?: string;
+}
+
 export class KakaoNativeConnector extends EventEmitter implements ChatConnector {
   private readonly readBridge = new KakaoNativeBridge();
   private readonly actionBridge = new KakaoNativeBridge();
@@ -42,6 +48,8 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
   private loadingOlder = false;
   private sending = false;
   private openingConversation = false;
+  private previewing = false;
+  private previewPromise?: Promise<ImagePreviewResult>;
   private stopped = false;
   private pendingOwnTexts: string[] = [];
   private snapshot: ChatSnapshot = {
@@ -91,11 +99,51 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
     this.stopped = true;
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = undefined;
+    // Let an in-flight capture transfer or remove its temporary file before
+    // terminating the bridge process that owns the capture operation.
+    await this.previewPromise?.catch(() => undefined);
     const refreshPromise = this.refreshPromise;
     // Stop the bridge first so an Accessibility request cannot indefinitely
     // delay shutdown after KakaoTalk itself has been closed.
     await Promise.all([this.readBridge.stop(), this.actionBridge.stop()]);
     await refreshPromise?.catch(() => undefined);
+  }
+
+  public async previewImage(selector: ImagePreviewSelector): Promise<ImagePreviewResult> {
+    if (!this.activeTitle) return { unavailable: "no-conversation" };
+    if (selector !== "latest" && (!Number.isSafeInteger(selector) || selector < 0)) {
+      return { unavailable: "invalid-selector" };
+    }
+    if (this.previewing || this.openingConversation || this.sending) return { unavailable: "busy" };
+    const title = this.activeTitle;
+    const selected = selector === "latest" ? undefined : this.snapshot.messages.find(
+      (message) => message.previewIndex === selector && (message.kind === "image" || message.kind === "sticker"),
+    );
+    if (selector !== "latest" && selected?.previewImageCount === undefined) {
+      return { unavailable: "not-visible" };
+    }
+    this.previewing = true;
+    try {
+      // Finish an in-flight AX read before raising or scrolling the chat window.
+      await this.refreshPromise?.catch(() => undefined);
+      if (title !== this.activeTitle || this.stopped) return { unavailable: "not-visible" };
+      this.previewPromise = this.actionBridge.request<ImagePreviewResult>("captureMessageImage", {
+        title,
+        selector,
+        ...(selected ? { expectedImageCount: selected.previewImageCount } : {}),
+      });
+      const result = await this.previewPromise;
+      if (this.stopped && "path" in result) {
+        await rm(result.path, { force: true });
+        return { unavailable: "not-visible" };
+      }
+      return result;
+    } catch {
+      return { unavailable: "capture-failed" };
+    } finally {
+      this.previewing = false;
+      this.previewPromise = undefined;
+    }
   }
 
   public refresh(): Promise<void> {
@@ -233,7 +281,7 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
   }
 
   private async performRefresh(): Promise<void> {
-    if (this.stopped || this.sending || this.openingConversation) return;
+    if (this.stopped || this.sending || this.openingConversation || this.previewing) return;
     try {
       let conversations = this.snapshot.conversations;
       if (
@@ -268,7 +316,7 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
       if (this.activeConversationId && this.activeTitle) {
         const messageThreadId = this.activeConversationId;
         const messageWindowTitle = this.activeTitle;
-        const rawMessages = await this.readBridge.request<RawMessage[]>("messages", {
+        const rawMessages = await this.readBridge.request<NativeMessage[]>("messages", {
           title: messageWindowTitle,
           direction: this.loadingOlder ? "older" : "newer",
           limit: this.loadingOlder ? 15 : 8,
@@ -277,13 +325,24 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
         const reconciled = reconcilePendingOwnMessages(rawMessages, this.pendingOwnTexts);
         this.pendingOwnTexts = reconciled.remaining;
         const visibleMessages = reconciled.messages
-          .map((raw, index) => normalizeMessage(messageThreadId, raw, index))
+          .map((raw, index) => {
+            const message = normalizeMessage(messageThreadId, raw, index);
+            const native = rawMessages[index];
+            if (message && native?.previewIndex !== undefined && native.previewImageCount !== undefined) {
+              message.previewIndex = Number(native.previewIndex);
+              message.previewImageCount = Number(native.previewImageCount);
+              message.id += `:image:${native.previewImageCount}:${native.previewIndex}`;
+            }
+            return message;
+          })
           .filter((item): item is ChatMessage => item !== undefined);
         // A send may complete on the action bridge while this read is in flight.
         // Merge against the latest history so that confirmed local messages are
         // not overwritten by a stale background window.
         messages = this.history.get(messageThreadId) ?? messages;
-        messages = mergeMessageWindows(
+        const imageCount = Number(rawMessages[0]?.previewImageCount);
+        messages = reconcilePreviewIndexes(messages, imageCount);
+        messages = mergeKakaoMessageWindows(
           messages,
           visibleMessages,
           this.loadingOlder ? "older" : "newer",
@@ -308,6 +367,42 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
     this.snapshot = snapshot;
     this.emit("snapshot", snapshot);
   }
+}
+
+export function reconcilePreviewIndexes(
+  messages: ChatMessage[], imageCount: number,
+): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.previewIndex === undefined || message.previewImageCount === undefined) return message;
+    // Read direction does not prove which end grew: the native app can load
+    // older history while receiving new images. Only fresh native positions
+    // may be used after the image window changes.
+    if (!Number.isSafeInteger(imageCount) || imageCount < 0 || imageCount !== message.previewImageCount) {
+      return { ...message, previewIndex: undefined, previewImageCount: undefined };
+    }
+    return message;
+  });
+}
+
+export function mergeKakaoMessageWindows(
+  existing: ChatMessage[], incoming: ChatMessage[], direction: "older" | "newer",
+): ChatMessage[] {
+  const originals = new Map([...existing, ...incoming].map((message) => [message.id, message]));
+  const withMediaIdentity = (message: ChatMessage): ChatMessage => {
+    if (message.kind !== "image" && message.kind !== "sticker") return message;
+    // The shared merger matches content and timestamp. Native photo markers
+    // have identical content, so use the native position only during matching.
+    // Unmapped historical media must not absorb a newly mapped image.
+    return {
+      ...message,
+      timestamp: `native-image:${message.previewImageCount ?? message.id}:${message.previewIndex ?? message.id}`,
+    };
+  };
+  return mergeMessageWindows(existing.map(withMediaIdentity), incoming.map(withMediaIdentity), direction)
+    .map((message) => {
+      if (message.kind !== "image" && message.kind !== "sticker") return message;
+      return { ...message, timestamp: originals.get(message.id)?.timestamp };
+    });
 }
 
 export function reconcilePendingOwnMessages(
