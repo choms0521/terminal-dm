@@ -67,3 +67,33 @@ such as `(사진)` / `(파일)`.
 - Findings captured during the KakaoTalk file-send work: the app's Accessibility
   tree shows received file bubbles with `열기` and `Finder에서 보기` buttons,
   which is a promising lead for resolving local file paths.
+
+## Spike results (KakaoTalk path resolution)
+
+Terminal capability of the target environment: **Ghostty** → Kitty graphics
+protocol is available, so inline preview is feasible.
+
+Path-resolution findings for KakaoTalk received media:
+
+- **AX tree exposes no path.** `AXImage` bubbles carry only a role description;
+  the `열기` / `Finder에서 보기` buttons and the filename `AXStaticText` expose no
+  `AXURL`, `AXFilename`, or path attribute.
+- **`AXShowMenu` is unsupported** on image elements (error -25206), and a
+  synthesized right-click did not surface a context menu reachable through the AX
+  tree, so a "copy image → read clipboard" path is not currently viable.
+- **`Finder에서 보기` works.** Pressing that button via `AXPress` and then reading
+  the Finder selection with AppleScript
+  (`POSIX path of (item 1 of (get selection) as alias)`) returns the exact
+  on-disk path (verified: `/Users/mscho/Downloads/1782871715266.png`). Reliable,
+  but it pops a Finder window to the foreground (disruptive) and only applies to
+  bubbles that expose the button (downloaded file/photo attachments).
+- **Local cache exists.** KakaoTalk caches displayed media as real JPEGs under
+  `~/Library/Containers/com.kakao.KakaoTalkMac/Data/tmp/<hash>/tempMedia/`.
+  Filenames are content hashes with no message mapping, so selecting the right
+  file for a specific message is a heuristic (e.g. most-recent by mtime) rather
+  than exact.
+
+Implications: reliable resolution requires an active step (Finder reveal), which
+is disruptive; the non-disruptive cache route is approximate. Inline photos that
+have not been downloaded may lack the `Finder에서 보기` affordance and need a
+download trigger first.
