@@ -293,7 +293,7 @@ final class KakaoAccessibility {
     let candidateRows = direction == "older" ? rows : Array(rows.reversed())
     for row in candidateRows {
       selectedRows.append(row)
-      if readableMessageText(in: row) != nil { readableCount += 1 }
+      if readableMessageText(in: row) != nil || mediaMarker(in: row) != nil { readableCount += 1 }
       if readableCount >= windowLimit { break }
     }
     if direction != "older" { selectedRows.reverse() }
@@ -309,16 +309,34 @@ final class KakaoAccessibility {
         if elementRole == kAXTextAreaRole as String { textAreas.append(element) }
         else if elementRole == kAXStaticTextRole as String { labels.append(element) }
       }
-      guard let messageArea = textAreas.last,
-            let rawMessageText = stringAttribute(messageArea, kAXValueAttribute as CFString),
-            !rawMessageText.isEmpty,
-            let messagePosition = position(of: messageArea),
-            let messageSize = size(of: messageArea) else { continue }
-      let messageText = rawMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
-      if messageText == "여기까지 읽었습니다." ||
-         messageText == "여기까지 읽었습니다" ||
-         messageText == "메시지가 삭제되었습니다." ||
-         messageText == "메시지가 삭제되었습니다" { continue }
+
+      // Resolve the message content: a readable text bubble, or a media marker
+      // (photo/file) for rows that have no readable text area. `anchor` is the
+      // element whose horizontal position decides the sender side.
+      var messageText: String
+      var messageKind: String?
+      let anchor: AXUIElement
+      if let messageArea = textAreas.last,
+         let rawMessageText = stringAttribute(messageArea, kAXValueAttribute as CFString),
+         !rawMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let trimmed = rawMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "여기까지 읽었습니다." ||
+           trimmed == "여기까지 읽었습니다" ||
+           trimmed == "메시지가 삭제되었습니다." ||
+           trimmed == "메시지가 삭제되었습니다" { continue }
+        messageText = trimmed
+        messageKind = nil
+        anchor = messageArea
+      } else if let media = mediaMarker(in: row) {
+        messageText = media.text
+        messageKind = media.kind
+        anchor = media.anchor
+      } else {
+        continue
+      }
+
+      guard let messagePosition = position(of: anchor),
+            let messageSize = size(of: anchor) else { continue }
       let isEdited = labels.contains {
         title(of: $0).trimmingCharacters(in: .whitespacesAndNewlines) == "수정됨"
       }
@@ -331,9 +349,60 @@ final class KakaoAccessibility {
         }
         sender = lastSender.isEmpty ? "unknown" : lastSender
       }
-      output.append(["text": isEdited ? "\(messageText) (수정됨)" : messageText, "sender": sender])
+      var entry: [String: String] = [
+        "text": isEdited ? "\(messageText) (수정됨)" : messageText,
+        "sender": sender,
+      ]
+      if let messageKind { entry["kind"] = messageKind }
+      output.append(entry)
     }
     return output
+  }
+
+  // Photos, videos and file attachments have their own rows with no readable
+  // text area. Detect them so they surface in the message list as a marker
+  // ("(사진)" via kind=image, or "(파일: name)") instead of being dropped.
+  // `anchor` is the element whose position is used to infer the sender side.
+  private func mediaMarker(in row: AXUIElement) -> (text: String, kind: String?, anchor: AXUIElement)? {
+    guard let cell = children(of: row).first else { return nil }
+
+    // File attachment: the bubble carries a "열기" / "Finder에서 보기" button.
+    // AX often returns an empty description string (not nil), so fall back to the
+    // title only when the description is actually empty.
+    let buttons = descendants(of: cell, matching: kAXButtonRole as String)
+    let fileButton = buttons.first(where: {
+      let described = stringAttribute($0, kAXDescriptionAttribute as CFString) ?? ""
+      let label = (described.isEmpty ? title(of: $0) : described)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      return label == "Finder에서 보기" || label == "열기"
+    })
+    if let fileButton {
+      // The filename is a static text that is a bare "<name>.<ext>" token; anchor
+      // the regex so size labels like "용량: 368.0KB" are not mistaken for it.
+      let filename = descendants(of: cell, matching: kAXStaticTextRole as String)
+        .map { title(of: $0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first(where: { $0.range(of: #"^\S+\.[A-Za-z0-9]{1,6}$"#, options: .regularExpression) != nil })
+      let marker = filename.map { "(파일: \($0))" } ?? "(파일)"
+      return (marker, nil, fileButton)
+    }
+
+    // Photo / image: a sizable image in a row with no readable text anywhere.
+    // Requiring the whole cell to be text-free avoids clobbering link previews or
+    // reply bubbles (which nest their text deeper than the direct-child text area
+    // the text branch inspects) into a bare "(사진)" that loses their words.
+    let hasNestedText = descendants(of: cell, matching: kAXTextAreaRole as String).contains {
+      !(stringAttribute($0, kAXValueAttribute as CFString) ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    let photo = hasNestedText ? nil : descendants(of: cell, matching: kAXImageRole as String).first(where: {
+      let s = size(of: $0) ?? .zero
+      return s.width >= 60 && s.height >= 60
+    })
+    if let photo {
+      return ("(사진)", "image", photo)
+    }
+
+    return nil
   }
 
   private func readableMessageText(in row: AXUIElement) -> String? {
