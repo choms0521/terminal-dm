@@ -3,7 +3,7 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "oh-my-dm",
+      "package-name": "terminal-dm",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
       "pull-request-title-pattern": "chore: release ${version}",

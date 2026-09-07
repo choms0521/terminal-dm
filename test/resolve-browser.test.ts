@@ -17,7 +17,7 @@ test("기본 브라우저와 무관하게 Playwright Chromium을 선택한다", 
 test("명시된 custom Chromium만 기본 Playwright 실행 파일보다 우선한다", () => {
   const configured = "./custom-chromium";
   assert.deepEqual(
-    resolveBrowserExecutable({ OH_MY_DM_BROWSER: configured }, "/playwright/chromium", () => true),
+    resolveBrowserExecutable({ TERMINAL_DM_BROWSER: configured }, "/playwright/chromium", () => true),
     {
       label: "custom Chromium",
       executablePath: path.resolve(configured),

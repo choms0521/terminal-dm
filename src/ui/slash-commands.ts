@@ -35,9 +35,9 @@ const COMMANDS: Array<Omit<SlashCommand, "description"> & { descriptions: Record
   { name: "theme", aliases: ["themes"], descriptions: { ko: "UI 색상 테마 선택", en: "Choose a UI theme" }, usage: "/theme [name]" },
   { name: "language", aliases: ["lang"], descriptions: { ko: "표시 언어 선택", en: "Choose the display language" }, usage: "/language [auto|ko|en]" },
   { name: "refresh", aliases: ["r"], descriptions: { ko: "connector 화면 다시 읽기", en: "Refresh connector views" }, usage: "/refresh" },
-  { name: "update", descriptions: { ko: "oh-my-dm 최신 버전 설치", en: "Install the latest oh-my-dm version" }, usage: "/update" },
+  { name: "update", descriptions: { ko: "terminal-dm 최신 버전 설치", en: "Install the latest terminal-dm version" }, usage: "/update" },
   { name: "clear", aliases: ["c"], descriptions: { ko: "현재 메시지 화면 비우기", en: "Clear the current message view" }, usage: "/clear" },
-  { name: "exit", aliases: ["quit", "q"], descriptions: { ko: "oh-my-dm 종료", en: "Exit oh-my-dm" }, usage: "/exit" },
+  { name: "exit", aliases: ["quit", "q"], descriptions: { ko: "terminal-dm 종료", en: "Exit terminal-dm" }, usage: "/exit" },
 ];
 
 export function getSlashCommands(language: AppLanguage = "ko"): SlashCommand[] {

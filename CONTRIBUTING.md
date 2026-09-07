@@ -1,10 +1,10 @@
-# oh-my-dm 기여 가이드 / Contributing to oh-my-dm
+# terminal-dm 기여 가이드 / Contributing to terminal-dm
 
 [한국어](#한국어) · [English](#english)
 
 ## 한국어
 
-oh-my-dm 개선에 참여해 주셔서 감사합니다. 범위가 작고 목적이 분명하며 테스트가 포함된 변경일수록 빠르게 검토할 수 있습니다.
+terminal-dm 개선에 참여해 주셔서 감사합니다. 범위가 작고 목적이 분명하며 테스트가 포함된 변경일수록 빠르게 검토할 수 있습니다.
 
 ### 시작하기 전에
 
@@ -18,8 +18,8 @@ oh-my-dm 개선에 참여해 주셔서 감사합니다. 범위가 작고 목적�
 Node.js 22 이상과 npm이 필요합니다. Instagram 테스트에는 Playwright Chromium을 사용하고, 카카오톡 개발과 수동 테스트에는 macOS가 필요합니다.
 
 ```bash
-git clone git@github.com:stacking-money-forever/oh-my-dm.git
-cd oh-my-dm
+git clone git@github.com:choms0521/terminal-dm.git
+cd terminal-dm
 npm ci
 npm test
 npm run typecheck
@@ -29,10 +29,10 @@ npm run build
 Connector를 수동 테스트할 때는 격리된 데이터 디렉터리를 사용하세요.
 
 ```bash
-OH_MY_DM_DATA="$PWD/.oh-my-dm" npm run dev
+TERMINAL_DM_DATA="$PWD/.terminal-dm" npm run dev
 ```
 
-`.oh-my-dm/`은 Git에서 제외됩니다. 강제로 추가하지 마세요.
+`.terminal-dm/`은 Git에서 제외됩니다. 강제로 추가하지 마세요.
 
 ### 브랜치와 커밋
 
@@ -80,7 +80,7 @@ PR은 CI와 review를 통과해야 합니다. PR 제목이 release commit이 되
 
 ## English
 
-Thanks for helping improve oh-my-dm. Small, focused changes with tests are the easiest to review.
+Thanks for helping improve terminal-dm. Small, focused changes with tests are the easiest to review.
 
 ### Before you start
 
@@ -94,8 +94,8 @@ Thanks for helping improve oh-my-dm. Small, focused changes with tests are the e
 Node.js 22 or later and npm are required. Instagram tests use Playwright Chromium. KakaoTalk development and manual testing require macOS.
 
 ```bash
-git clone git@github.com:stacking-money-forever/oh-my-dm.git
-cd oh-my-dm
+git clone git@github.com:choms0521/terminal-dm.git
+cd terminal-dm
 npm ci
 npm test
 npm run typecheck
@@ -105,10 +105,10 @@ npm run build
 Use an isolated data directory for manual connector testing:
 
 ```bash
-OH_MY_DM_DATA="$PWD/.oh-my-dm" npm run dev
+TERMINAL_DM_DATA="$PWD/.terminal-dm" npm run dev
 ```
 
-The `.oh-my-dm/` directory is ignored. Do not force-add it.
+The `.terminal-dm/` directory is ignored. Do not force-add it.
 
 ### Branches and commits
 

@@ -5,7 +5,7 @@ Status: planned (to be implemented after KakaoTalk file send)
 ## Goal
 
 Let users preview media that other people send (photos, and possibly files)
-directly inside the oh-my-dm terminal UI, instead of only seeing a text marker
+directly inside the terminal-dm terminal UI, instead of only seeing a text marker
 such as `(사진)` / `(파일)`.
 
 ## Current behavior
@@ -38,7 +38,7 @@ such as `(사진)` / `(파일)`.
      expose a file path via the `열기` / `Finder에서 보기` affordances. Needs
      investigation to find a stable way to resolve the on-disk path without
      saving anything new ourselves.
-3. **Privacy/design fit.** oh-my-dm is intentionally ephemeral and does not
+3. **Privacy/design fit.** terminal-dm is intentionally ephemeral and does not
    persist media. Any preview must be transient (in-memory / temp only) and must
    not create a durable media archive. This must stay consistent with the
    project's local-first, no-storage stance.

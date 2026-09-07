@@ -1,16 +1,16 @@
 {
-  "name": "oh-my-dm",
+  "name": "terminal-dm",
   "version": "0.7.1",
   "description": "DM without looking like you're DMing — a discreet Agent CLI-style TUI messenger.",
   "license": "Apache-2.0",
-  "author": "Hyunwoo Gu <162293672+guhyunwoo@users.noreply.github.com>",
-  "homepage": "https://github.com/stacking-money-forever/oh-my-dm#readme",
+  "author": "mscho <choms0521@gmail.com>",
+  "homepage": "https://github.com/choms0521/terminal-dm#readme",
   "bugs": {
-    "url": "https://github.com/stacking-money-forever/oh-my-dm/issues"
+    "url": "https://github.com/choms0521/terminal-dm/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stacking-money-forever/oh-my-dm.git"
+    "url": "git+https://github.com/choms0521/terminal-dm.git"
   },
   "keywords": [
     "cli",
@@ -30,7 +30,7 @@
   "type": "module",
   "bin": {
     "dm": "dist/cli.js",
-    "oh-my-dm": "dist/cli.js"
+    "terminal-dm": "dist/cli.js"
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', {recursive:true, force:true})\"",

@@ -74,7 +74,7 @@ type TranscriptItem =
   | { id: string; kind: "signature"; full: boolean }
   | { id: string; kind: "message"; message: ChatSnapshot["messages"][number] };
 
-const PROJECT_URL = "https://github.com/stacking-money-forever/oh-my-dm";
+const PROJECT_URL = "https://github.com/choms0521/terminal-dm";
 
 export function App({
   connector,
@@ -1004,7 +1004,7 @@ export function App({
   if (terminalTooSmall) {
     return (
       <Text color={theme.muted}>
-        {truncateToWidth("oh-my-dm · resize ≥24×10", terminalSize.columns)}
+        {truncateToWidth("terminal-dm · resize ≥24×10", terminalSize.columns)}
       </Text>
     );
   }
@@ -1018,7 +1018,7 @@ export function App({
               <Box key={item.id} flexDirection="column" marginTop={1} paddingX={1}>
                 <Text>
                   <Text color={theme.accent}>{" /\\_/\\  "}</Text>
-                  <Text bold>  oh-my-dm</Text>
+                  <Text bold>  terminal-dm</Text>
                   <Text color={theme.muted}> v{APP_VERSION}</Text>
                 </Text>
                 <Text>
@@ -1036,7 +1036,7 @@ export function App({
             ) : (
               <Box key={item.id} flexDirection="column" marginTop={1} paddingX={1}>
                 <Text>
-                  <Text bold color={theme.accent}>oh-my-dm</Text>
+                  <Text bold color={theme.accent}>terminal-dm</Text>
                   <Text color={theme.muted}> v{APP_VERSION}</Text>
                 </Text>
                 <Text> </Text>

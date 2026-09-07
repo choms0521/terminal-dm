@@ -4,8 +4,7 @@ dist/
 *.tgz
 .DS_Store
 .gjc/
-.oh-my-chat/
-.oh-my-dm/
+.terminal-dm/
 
 # OMC session state (local only)
 .omc/

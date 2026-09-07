@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions and ideas / 질문 및 아이디어
-    url: https://github.com/stacking-money-forever/oh-my-dm/discussions
+    url: https://github.com/choms0521/terminal-dm/discussions
     about: Ask usage questions or discuss an idea before proposing it.
   - name: Security report / 보안 제보
-    url: https://github.com/stacking-money-forever/oh-my-dm/security/advisories/new
+    url: https://github.com/choms0521/terminal-dm/security/advisories/new
     about: Report vulnerabilities privately. Never disclose sessions or messages publicly.

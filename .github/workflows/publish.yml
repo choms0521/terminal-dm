@@ -37,9 +37,9 @@ jobs:
         id: registry
         run: |
           version=$(node -p 'require("./package.json").version')
-          if npm view "oh-my-dm@$version" version >/dev/null 2>&1; then
+          if npm view "terminal-dm@$version" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "oh-my-dm@$version is already published; skipping npm publish."
+            echo "terminal-dm@$version is already published; skipping npm publish."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi

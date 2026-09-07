@@ -1,5 +1,5 @@
 name: Feature request / 기능 제안
-description: Propose a focused improvement to oh-my-dm.
+description: Propose a focused improvement to terminal-dm.
 title: "feat: "
 labels: ["type: feature", "status: needs-triage"]
 body:

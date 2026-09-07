@@ -437,7 +437,7 @@ export async function cloneInstagramProfile(
   sourceProfileDir: string,
   temporaryRoot = os.tmpdir(),
 ): Promise<{ profileDir: string; cleanupDir: string }> {
-  const cleanupDir = await fs.mkdtemp(path.join(temporaryRoot, "oh-my-dm-instagram-"));
+  const cleanupDir = await fs.mkdtemp(path.join(temporaryRoot, "terminal-dm-instagram-"));
   const profileDir = path.join(cleanupDir, "profile");
   try {
     await fs.cp(sourceProfileDir, profileDir, {
@@ -1021,7 +1021,7 @@ export class InstagramWebConnector extends EventEmitter implements ChatConnector
   }
 
   private async installWakeSignals(page: Page): Promise<void> {
-    await page.exposeBinding("__ohMyDmWake", () => {
+    await page.exposeBinding("__terminalDmWake", () => {
       this.scheduleRefresh("dom");
     });
 
@@ -1073,7 +1073,7 @@ export class InstagramWebConnector extends EventEmitter implements ChatConnector
         this.updateSnapshot({
           ...this.snapshot,
           state: "login-required",
-          detail: "Playwright Chromium에서 Instagram 로그인을 완료하세요: oh-my-dm login instagram",
+          detail: "Playwright Chromium에서 Instagram 로그인을 완료하세요: terminal-dm login instagram",
         });
         return;
       }
@@ -1606,7 +1606,7 @@ function normalizeComparableText(value: string): string {
 }
 
 export function observeInstagramChanges(): void {
-  const key = "__ohMyDmObserverInstalled";
+  const key = "__terminalDmObserverInstalled";
   const browserWindow = window as typeof window & Record<string, unknown>;
   if (browserWindow[key]) return;
   browserWindow[key] = true;
@@ -1618,7 +1618,7 @@ export function observeInstagramChanges(): void {
       new MutationObserver(() => {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
-          const callback = browserWindow.__ohMyDmWake;
+          const callback = browserWindow.__terminalDmWake;
           if (typeof callback === "function") void callback();
         }, 120);
       }).observe(document.body, {
@@ -1633,7 +1633,7 @@ export function observeInstagramChanges(): void {
     new MutationObserver(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        const callback = browserWindow.__ohMyDmWake;
+        const callback = browserWindow.__terminalDmWake;
         if (typeof callback === "function") void callback();
       }, 120);
     }).observe(document.body, {

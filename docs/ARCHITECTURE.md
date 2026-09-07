@@ -4,7 +4,7 @@
 
 ## 한국어
 
-oh-my-dm은 로컬에서만 실행되는 TypeScript/Ink TUI입니다. 애플리케이션 backend와 메시지 database가 없습니다.
+terminal-dm은 로컬에서만 실행되는 TypeScript/Ink TUI입니다. 애플리케이션 backend와 메시지 database가 없습니다.
 
 ```text
 Instagram web ── DOM/WebSocket wake-up ─┐
@@ -23,7 +23,7 @@ KakaoTalk macOS ─ Accessibility/Swift ──┘
 
 ### 데이터 규칙
 
-Connector가 source of truth입니다. 대화방과 메시지 내용은 메모리에만 유지되며 oh-my-dm이 영구 저장하지 않습니다. 브라우저 프로필에는 Instagram 로그인 세션이 있으므로 항상 Git에서 제외해야 합니다. 설정 파일은 현재 사용자만 접근할 수 있는 권한으로 기록합니다.
+Connector가 source of truth입니다. 대화방과 메시지 내용은 메모리에만 유지되며 terminal-dm이 영구 저장하지 않습니다. 브라우저 프로필에는 Instagram 로그인 세션이 있으므로 항상 Git에서 제외해야 합니다. 설정 파일은 현재 사용자만 접근할 수 있는 권한으로 기록합니다.
 
 ### 렌더링 규칙
 
@@ -35,7 +35,7 @@ Instagram selector와 카카오톡 accessibility label은 안정적인 public AP
 
 ## English
 
-oh-my-dm is a local-only TypeScript/Ink TUI. There is no application backend and no message database.
+terminal-dm is a local-only TypeScript/Ink TUI. There is no application backend and no message database.
 
 ```text
 Instagram web ── DOM/WebSocket wake-up ─┐
@@ -54,7 +54,7 @@ KakaoTalk macOS ─ Accessibility/Swift ──┘
 
 ### Data rules
 
-Connectors are the source of truth. Conversation and message content remains in memory and is not persisted by oh-my-dm. The browser profile contains the Instagram login session and must always remain ignored by Git. Settings are written with user-only file permissions.
+Connectors are the source of truth. Conversation and message content remains in memory and is not persisted by terminal-dm. The browser profile contains the Instagram login session and must always remain ignored by Git. Settings are written with user-only file permissions.
 
 ### Rendering rules
 
