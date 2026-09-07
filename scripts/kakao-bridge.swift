@@ -442,9 +442,12 @@ final class KakaoAccessibility {
       let chatWindow = try window(named: windowTitle)
       let (scrollArea, _, rows) = try messageRows(in: chatWindow)
       let images = imageRows(in: rows)
-      if !isLatest, let expectedImageCount, expectedImageCount != images.count {
-        return ["unavailable": "not-visible"]
-      }
+      // Note: a caller-supplied expectedImageCount is intentionally not compared
+      // against images.count here — the UI counts images only within its loaded
+      // message window while this walks every currently loaded AX row, so the
+      // totals legitimately differ. Both count images from the bottom, so the
+      // index still maps to the same image for the selectable (recent) range.
+      _ = expectedImageCount
       guard !images.isEmpty else { return ["unavailable": "no-image"] }
       guard index < images.count else { return ["unavailable": "not-visible"] }
       let target = images[index]
