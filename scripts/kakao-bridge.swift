@@ -491,13 +491,20 @@ final class KakaoAccessibility {
     }
   }
 
+  // The file-transfer dialog is an AXSheet attached directly to the chat window.
+  private func fileTransferSheet(in window: AXUIElement) -> AXUIElement? {
+    children(of: window).first(where: { role(of: $0) == kAXSheetRole as String })
+  }
+
   private func fileSendButton(in window: AXUIElement) -> AXUIElement? {
     // KakaoTalk's file-transfer dialog exposes a confirm button titled
     // "N개 전송" (for example "2개 전송"). The plain text-composer button is
-    // titled "전송" and must not be matched here.
-    descendants(of: window, matching: kAXButtonRole as String).first(where: {
-      let name = title(of: $0)
-      return name.range(of: #"^\d+개 전송$"#, options: .regularExpression) != nil
+    // titled "전송" and must not be matched here. Search only the sheet, not the
+    // whole window: the message scroll area holds hundreds of bubbles and walking
+    // it on every poll made detection take ~10s on long conversations.
+    guard let sheet = fileTransferSheet(in: window) else { return nil }
+    return descendants(of: sheet, matching: kAXButtonRole as String).first(where: {
+      title(of: $0).range(of: #"^\d+개 전송$"#, options: .regularExpression) != nil
     })
   }
 
@@ -554,7 +561,11 @@ final class KakaoAccessibility {
 
     var confirmButton: AXUIElement?
     for _ in 0..<3 {
-      focusChatAndPaste()
+      // Only paste when no transfer sheet is open yet, so a slow-opening dialog
+      // is not given a second file by a redundant re-paste.
+      if fileTransferSheet(in: chatWindow) == nil {
+        focusChatAndPaste()
+      }
       let attemptDeadline = Date().addingTimeInterval(2.5)
       repeat {
         if let button = fileSendButton(in: chatWindow) { confirmButton = button; break }
@@ -564,7 +575,8 @@ final class KakaoAccessibility {
     }
 
     guard let confirmButton else {
-      if let cancel = descendants(of: chatWindow, matching: kAXButtonRole as String).first(where: { title(of: $0) == "취소" }) {
+      if let sheet = fileTransferSheet(in: chatWindow),
+         let cancel = descendants(of: sheet, matching: kAXButtonRole as String).first(where: { title(of: $0) == "취소" }) {
         _ = AXUIElementPerformAction(cancel, kAXPressAction as CFString)
       }
       if let previousApplication, previousApplication != application { previousApplication.activate() }
