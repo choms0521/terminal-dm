@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { basename, resolve } from "node:path";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
 import stringWidth from "string-width";
@@ -806,6 +809,33 @@ export function App({
           setNotice(copy.noConversationMatch(args.join(" ")));
         } else {
           setNotice(copy.candidates(matches.slice(0, 5).map((item) => item.title).join(", ")));
+        }
+        return;
+      }
+      case "file": {
+        const raw = args.join(" ").trim();
+        if (!raw) {
+          setNotice(copy.fileUsage);
+          return;
+        }
+        if (!snapshot.activeConversationId || workspaceCleared) {
+          setNotice(copy.chooseConversationFirst);
+          return;
+        }
+        if (!connector.sendFile) {
+          showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
+          return;
+        }
+        const path = raw.startsWith("~")
+          ? resolve(homedir(), raw.slice(1).replace(/^\/+/, ""))
+          : resolve(raw);
+        const name = basename(path);
+        setNotice(copy.sendingFile(name));
+        try {
+          await connector.sendFile([path]);
+          setNotice(copy.fileSent(name));
+        } catch (error) {
+          showError(error);
         }
         return;
       }

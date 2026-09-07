@@ -36,6 +36,17 @@ test("명령 이름과 별칭을 검색한다", () => {
   assert.match(filterSlashCommands("/", "en")[0]?.description ?? "", /commands/i);
 });
 
+test("file 명령과 별칭을 검색하고 경로 인자를 파싱한다", () => {
+  assert.equal(findSlashCommand("file")?.name, "file");
+  assert.equal(findSlashCommand("f")?.name, "file");
+  assert.equal(findSlashCommand("send")?.name, "file");
+  assert.deepEqual(parseSubmission("/file ~/photo.png"), {
+    kind: "command",
+    name: "file",
+    args: ["~/photo.png"],
+  });
+});
+
 test("slash 뒤 공백이 있어도 exit 명령을 파싱한다", () => {
   assert.deepEqual(parseSubmission("/ exit"), {
     kind: "command",

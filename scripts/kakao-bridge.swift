@@ -475,6 +475,107 @@ final class KakaoAccessibility {
     throw BridgeError.message("KakaoTalk에서 8초 안에 메시지 전송을 확인하지 못했습니다.")
   }
 
+  private func postCommandV() {
+    // Command+V. Unlike the text composer's per-character keystrokes, a paste
+    // has to be delivered while KakaoTalk is frontmost, so it is posted to the
+    // HID event tap rather than directly to the process.
+    let vKey: CGKeyCode = 9
+    for keyDown in [true, false] {
+      guard let event = CGEvent(
+        keyboardEventSource: CGEventSource(stateID: .combinedSessionState),
+        virtualKey: vKey,
+        keyDown: keyDown
+      ) else { continue }
+      event.flags = .maskCommand
+      event.post(tap: .cghidEventTap)
+    }
+  }
+
+  private func fileSendButton(in window: AXUIElement) -> AXUIElement? {
+    // KakaoTalk's file-transfer dialog exposes a confirm button titled
+    // "N개 전송" (for example "2개 전송"). The plain text-composer button is
+    // titled "전송" and must not be matched here.
+    descendants(of: window, matching: kAXButtonRole as String).first(where: {
+      let name = title(of: $0)
+      return name.range(of: #"^\d+개 전송$"#, options: .regularExpression) != nil
+    })
+  }
+
+  func sendFile(windowTitle: String, paths: [String]) throws -> [String: Bool] {
+    guard !paths.isEmpty else { throw BridgeError.message("전송할 파일이 없습니다.") }
+    let urls = paths.map { URL(fileURLWithPath: $0) }
+    for url in urls where !FileManager.default.fileExists(atPath: url.path) {
+      throw BridgeError.message("파일을 찾을 수 없습니다: \(url.path)")
+    }
+
+    let chatWindow = try window(named: windowTitle)
+    let scrollAreas = children(of: chatWindow).filter { role(of: $0) == kAXScrollAreaRole as String }
+    guard let input = scrollAreas.last.flatMap({ descendants(of: $0, matching: kAXTextAreaRole as String).first }) else {
+      throw BridgeError.message("KakaoTalk 입력창을 찾지 못했습니다.")
+    }
+
+    // Pasting is the only reliable way to attach a file through Accessibility, so
+    // the file URLs go on the clipboard just long enough to paste. The user's
+    // previous clipboard contents are captured here and restored on exit.
+    let pasteboard = NSPasteboard.general
+    let savedItems: [NSPasteboardItem] = (pasteboard.pasteboardItems ?? []).map { item in
+      let copy = NSPasteboardItem()
+      for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+      return copy
+    }
+    defer {
+      pasteboard.clearContents()
+      if !savedItems.isEmpty { pasteboard.writeObjects(savedItems) }
+    }
+    pasteboard.clearContents()
+    guard pasteboard.writeObjects(urls.map { $0 as NSURL }) else {
+      throw BridgeError.message("클립보드에 파일을 올리지 못했습니다.")
+    }
+
+    // The paste keystroke only reaches KakaoTalk while it is frontmost, and its
+    // file-transfer dialog cancels itself once the app loses focus. So raise the
+    // chat window, paste, confirm the transfer, then restore the prior app.
+    let previousApplication = NSWorkspace.shared.frontmostApplication
+    let application = try runningApplication
+    _ = AXUIElementPerformAction(chatWindow, kAXRaiseAction as CFString)
+    try? setAttribute(chatWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
+    try? setAttribute(chatWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    application.activate()
+    usleep(300_000)
+    try? setAttribute(input, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    usleep(150_000)
+    postCommandV()
+
+    let openDeadline = Date().addingTimeInterval(3)
+    var confirmButton: AXUIElement?
+    repeat {
+      if let button = fileSendButton(in: chatWindow) { confirmButton = button; break }
+      usleep(100_000)
+    } while Date() < openDeadline
+
+    guard let confirmButton else {
+      if let cancel = descendants(of: chatWindow, matching: kAXButtonRole as String).first(where: { title(of: $0) == "취소" }) {
+        _ = AXUIElementPerformAction(cancel, kAXPressAction as CFString)
+      }
+      if let previousApplication, previousApplication != application { previousApplication.activate() }
+      throw BridgeError.message("KakaoTalk 파일 전송 창을 열지 못했습니다.")
+    }
+
+    _ = AXUIElementPerformAction(confirmButton, kAXPressAction as CFString)
+
+    // The dialog closing is the authoritative confirmation. The composer text
+    // field stays empty for a file send, so its value can never signal delivery.
+    let confirmDeadline = Date().addingTimeInterval(8)
+    var confirmed = false
+    repeat {
+      if fileSendButton(in: chatWindow) == nil { confirmed = true; break }
+      usleep(100_000)
+    } while Date() < confirmDeadline
+
+    if let previousApplication, previousApplication != application { previousApplication.activate() }
+    return ["confirmed": confirmed]
+  }
+
   func scrollOlder(windowTitle: String) throws {
     let chatWindow = try window(named: windowTitle)
     guard let scrollArea = children(of: chatWindow).first(where: { role(of: $0) == kAXScrollAreaRole as String }),
@@ -520,6 +621,9 @@ while let line = readLine() {
     case "messages": respond(id: id, result: try kakao.messages(windowTitle: command["title"] as? String ?? "", direction: command["direction"] as? String ?? "newer", limit: command["limit"] as? Int ?? 15))
     case "prepareComposer": try kakao.prepareComposer(windowTitle: command["title"] as? String ?? ""); respond(id: id, result: [:])
     case "send": respond(id: id, result: try kakao.send(windowTitle: command["title"] as? String ?? "", text: command["text"] as? String ?? ""))
+    case "sendFile":
+      let filePaths = (command["paths"] as? [String]) ?? (command["path"] as? String).map { [$0] } ?? []
+      respond(id: id, result: try kakao.sendFile(windowTitle: command["title"] as? String ?? "", paths: filePaths))
     case "scrollOlder": try kakao.scrollOlder(windowTitle: command["title"] as? String ?? ""); respond(id: id, result: [:])
     default: throw BridgeError.message("지원하지 않는 action입니다: \(action)")
     }

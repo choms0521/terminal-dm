@@ -78,6 +78,9 @@ const COPY = {
     exit: "종료",
     languageChanged: (label: string) => `language = "${label}"`,
     languageUsage: "사용법: /language [auto|ko|en]",
+    fileUsage: "사용법: /file <파일 경로>",
+    sendingFile: (name: string) => `파일 전송 중: ${name}…`,
+    fileSent: (name: string) => `파일을 전송했습니다: ${name}`,
   },
   en: {
     selectConversation: "Select a conversation",
@@ -132,6 +135,9 @@ const COPY = {
     exit: "Exit",
     languageChanged: (label: string) => `language = "${label}"`,
     languageUsage: "Usage: /language [auto|ko|en]",
+    fileUsage: "Usage: /file <path>",
+    sendingFile: (name: string) => `Sending file: ${name}…`,
+    fileSent: (name: string) => `Sent file: ${name}`,
   },
 } as const;
 

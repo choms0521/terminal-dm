@@ -67,6 +67,12 @@ export class UnifiedChatConnector extends EventEmitter implements ChatConnector 
     await this.requireActive().connector.sendMessage(text);
   }
 
+  public async sendFile(paths: string[]): Promise<void> {
+    const { connector } = this.requireActive();
+    if (!connector.sendFile) throw new Error("이 connector는 파일 전송을 지원하지 않습니다.");
+    await connector.sendFile(paths);
+  }
+
   public async loadOlderMessages(): Promise<number> {
     return this.requireActive().connector.loadOlderMessages();
   }
