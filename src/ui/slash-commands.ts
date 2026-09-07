@@ -1,3 +1,7 @@
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
 import type { AppLanguage } from "./i18n.js";
 
 export interface SlashCommand {
@@ -66,14 +70,18 @@ export function parseSubmission(value: string): ParsedSubmission {
 
 /**
  * Splits a raw argument string into individual file paths using shell-style
- * quoting: whitespace separates paths, while single or double quotes group a
- * path that contains spaces. Quote characters are removed from the result.
- * Tilde (~) is left intact for the caller to expand.
+ * quoting: whitespace separates paths, single or double quotes group a path
+ * that contains spaces, and a backslash escapes the next character (so a
+ * drag-and-dropped path like `my\ file.png` stays one token). Quote and escape
+ * characters are removed from the result. Single-quoted spans are literal (no
+ * escape processing). Empty tokens are dropped. Tilde (~) is left intact for
+ * the caller to expand.
  */
 export function tokenizeFileArgs(raw: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
+  let escaped = false;
 
   const flush = () => {
     if (current.length > 0) tokens.push(current);
@@ -81,12 +89,25 @@ export function tokenizeFileArgs(raw: string): string[] {
   };
 
   for (const ch of raw) {
-    if (quote) {
-      if (ch === quote) quote = null;
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
       else current += ch;
       continue;
     }
-    if (ch === '"' || ch === "'") {
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === "\\") escaped = true;
+      else current += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+    } else if (ch === '"' || ch === "'") {
       quote = ch;
     } else if (/\s/.test(ch)) {
       flush();
@@ -94,8 +115,44 @@ export function tokenizeFileArgs(raw: string): string[] {
       current += ch;
     }
   }
+  if (escaped) current += "\\";
   flush();
   return tokens;
+}
+
+/** Resolves a single path token, expanding a leading ~ to the home directory. */
+export function resolveFileToken(token: string): string {
+  return token.startsWith("~")
+    ? resolve(homedir(), token.slice(1).replace(/^\/+/, ""))
+    : resolve(token);
+}
+
+function defaultIsFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decides whether a raw submission should be treated as a drag-and-dropped (or
+ * typed) file path to send, rather than a slash command or a text message.
+ * True only when the input starts with a path prefix (/, ~/, ./ or ../) and
+ * every token resolves to an existing regular file — so ordinary commands,
+ * messages, and non-existent paths are never hijacked. A leading `//` forces a
+ * literal message and is always excluded. `isFile` is injectable for testing.
+ */
+export function looksLikeFilePathInput(
+  value: string,
+  isFile: (path: string) => boolean = defaultIsFile,
+): boolean {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("//")) return false;
+  if (!/^(\/|~\/|\.{1,2}\/)/.test(trimmed)) return false;
+  const tokens = tokenizeFileArgs(trimmed);
+  if (tokens.length === 0) return false;
+  return tokens.every((token) => isFile(resolveFileToken(token)));
 }
 
 export function filterSlashCommands(value: string, language: AppLanguage = "ko"): SlashCommand[] {

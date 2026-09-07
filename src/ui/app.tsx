@@ -1,5 +1,4 @@
-import { homedir } from "node:os";
-import { basename, resolve } from "node:path";
+import { basename } from "node:path";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
@@ -15,7 +14,9 @@ import {
   findSlashCommand,
   getSelectionWindow,
   getSlashCommands,
+  looksLikeFilePathInput,
   parseSubmission,
+  resolveFileToken,
   type SlashCommand,
   tokenizeFileArgs,
   wrapSelectionIndex,
@@ -787,6 +788,34 @@ export function App({
     workspaceCleared,
   ]);
 
+  const sendFilePaths = async (raw: string): Promise<void> => {
+    const tokens = tokenizeFileArgs(raw);
+    if (tokens.length === 0) {
+      setNotice(copy.fileUsage);
+      return;
+    }
+    if (!snapshot.activeConversationId || workspaceCleared) {
+      setNotice(copy.chooseConversationFirst);
+      return;
+    }
+    if (!connector.sendFile) {
+      showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
+      return;
+    }
+    const paths = tokens.map(resolveFileToken);
+    setNotice(
+      paths.length === 1 ? copy.sendingFile(basename(paths[0]!)) : copy.sendingFiles(paths.length),
+    );
+    try {
+      await connector.sendFile(paths);
+      setNotice(
+        paths.length === 1 ? copy.fileSent(basename(paths[0]!)) : copy.filesSent(paths.length),
+      );
+    } catch (error) {
+      showError(error);
+    }
+  };
+
   const executeCommand = async (command: SlashCommand, args: string[]): Promise<void> => {
     switch (command.name) {
       case "help":
@@ -814,36 +843,7 @@ export function App({
         return;
       }
       case "file": {
-        const raw = args.join(" ").trim();
-        const tokens = tokenizeFileArgs(raw);
-        if (tokens.length === 0) {
-          setNotice(copy.fileUsage);
-          return;
-        }
-        if (!snapshot.activeConversationId || workspaceCleared) {
-          setNotice(copy.chooseConversationFirst);
-          return;
-        }
-        if (!connector.sendFile) {
-          showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
-          return;
-        }
-        const paths = tokens.map((token) =>
-          token.startsWith("~")
-            ? resolve(homedir(), token.slice(1).replace(/^\/+/, ""))
-            : resolve(token),
-        );
-        setNotice(
-          paths.length === 1 ? copy.sendingFile(basename(paths[0]!)) : copy.sendingFiles(paths.length),
-        );
-        try {
-          await connector.sendFile(paths);
-          setNotice(
-            paths.length === 1 ? copy.fileSent(basename(paths[0]!)) : copy.filesSent(paths.length),
-          );
-        } catch (error) {
-          showError(error);
-        }
+        await sendFilePaths(args.join(" ").trim());
         return;
       }
       case "conversations":
@@ -970,6 +970,14 @@ export function App({
   const submit = (value: string): void => {
     const parsed = parseSubmission(value);
     if (parsed.kind === "empty") return;
+
+    if (looksLikeFilePathInput(value)) {
+      leaveCommandScreenImmediately();
+      setInput("");
+      setError(undefined);
+      void sendFilePaths(value.trim()).catch(showError);
+      return;
+    }
 
     if (parsed.kind === "command") {
       const command = findSlashCommand(parsed.name) ?? commandMatches[commandIndex];
