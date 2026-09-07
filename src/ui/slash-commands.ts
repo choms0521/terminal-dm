@@ -10,7 +10,7 @@ export interface SlashCommand {
 const COMMANDS: Array<Omit<SlashCommand, "description"> & { descriptions: Record<AppLanguage, string> }> = [
   { name: "help", aliases: ["h"], descriptions: { ko: "명령과 단축키 보기", en: "Show commands and shortcuts" }, usage: "/help" },
   { name: "open", aliases: ["o"], descriptions: { ko: "이름으로 대화방 열기", en: "Open a conversation by name" }, usage: "/open <name>" },
-  { name: "file", aliases: ["f", "send"], descriptions: { ko: "파일 전송 (KakaoTalk)", en: "Send a file (KakaoTalk)" }, usage: "/file <path>" },
+  { name: "file", aliases: ["f", "send"], descriptions: { ko: "파일 전송 (KakaoTalk)", en: "Send a file (KakaoTalk)" }, usage: "/file <path> [<path> …]" },
   {
     name: "conversations",
     aliases: ["chats", "ls"],
@@ -62,6 +62,40 @@ export function parseSubmission(value: string): ParsedSubmission {
 
   const [name = "", ...args] = trimmed.slice(1).trimStart().split(/\s+/);
   return { kind: "command", name: name.toLowerCase(), args };
+}
+
+/**
+ * Splits a raw argument string into individual file paths using shell-style
+ * quoting: whitespace separates paths, while single or double quotes group a
+ * path that contains spaces. Quote characters are removed from the result.
+ * Tilde (~) is left intact for the caller to expand.
+ */
+export function tokenizeFileArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+
+  const flush = () => {
+    if (current.length > 0) tokens.push(current);
+    current = "";
+  };
+
+  for (const ch of raw) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      flush();
+    } else {
+      current += ch;
+    }
+  }
+  flush();
+  return tokens;
 }
 
 export function filterSlashCommands(value: string, language: AppLanguage = "ko"): SlashCommand[] {

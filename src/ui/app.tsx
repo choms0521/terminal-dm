@@ -17,6 +17,7 @@ import {
   getSlashCommands,
   parseSubmission,
   type SlashCommand,
+  tokenizeFileArgs,
   wrapSelectionIndex,
 } from "./slash-commands.js";
 import {
@@ -814,7 +815,8 @@ export function App({
       }
       case "file": {
         const raw = args.join(" ").trim();
-        if (!raw) {
+        const tokens = tokenizeFileArgs(raw);
+        if (tokens.length === 0) {
           setNotice(copy.fileUsage);
           return;
         }
@@ -826,14 +828,19 @@ export function App({
           showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
           return;
         }
-        const path = raw.startsWith("~")
-          ? resolve(homedir(), raw.slice(1).replace(/^\/+/, ""))
-          : resolve(raw);
-        const name = basename(path);
-        setNotice(copy.sendingFile(name));
+        const paths = tokens.map((token) =>
+          token.startsWith("~")
+            ? resolve(homedir(), token.slice(1).replace(/^\/+/, ""))
+            : resolve(token),
+        );
+        setNotice(
+          paths.length === 1 ? copy.sendingFile(basename(paths[0]!)) : copy.sendingFiles(paths.length),
+        );
         try {
-          await connector.sendFile([path]);
-          setNotice(copy.fileSent(name));
+          await connector.sendFile(paths);
+          setNotice(
+            paths.length === 1 ? copy.fileSent(basename(paths[0]!)) : copy.filesSent(paths.length),
+          );
         } catch (error) {
           showError(error);
         }

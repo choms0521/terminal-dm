@@ -78,9 +78,11 @@ const COPY = {
     exit: "종료",
     languageChanged: (label: string) => `language = "${label}"`,
     languageUsage: "사용법: /language [auto|ko|en]",
-    fileUsage: "사용법: /file <파일 경로>",
+    fileUsage: '사용법: /file <파일 경로> [<파일 경로> …] (공백 포함 경로는 "따옴표")',
     sendingFile: (name: string) => `파일 전송 중: ${name}…`,
     fileSent: (name: string) => `파일을 전송했습니다: ${name}`,
+    sendingFiles: (count: number) => `파일 ${count}개 전송 중…`,
+    filesSent: (count: number) => `파일 ${count}개를 전송했습니다`,
   },
   en: {
     selectConversation: "Select a conversation",
@@ -135,9 +137,11 @@ const COPY = {
     exit: "Exit",
     languageChanged: (label: string) => `language = "${label}"`,
     languageUsage: "Usage: /language [auto|ko|en]",
-    fileUsage: "Usage: /file <path>",
+    fileUsage: 'Usage: /file <path> [<path> …] (use "quotes" for paths with spaces)',
     sendingFile: (name: string) => `Sending file: ${name}…`,
     fileSent: (name: string) => `Sent file: ${name}`,
+    sendingFiles: (count: number) => `Sending ${count} files…`,
+    filesSent: (count: number) => `Sent ${count} files`,
   },
 } as const;
 
