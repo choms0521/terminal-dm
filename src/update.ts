@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-const LATEST_PACKAGE_URL = "https://registry.npmjs.org/oh-my-dm/latest";
+const LATEST_PACKAGE_URL = "https://registry.npmjs.org/terminal-dm/latest";
 
 export function isNewerVersion(current: string, candidate: string): boolean {
   const left = parseVersion(current);
@@ -37,7 +37,7 @@ export function installLatestVersion(options: { silent?: boolean } = {}): Promis
   return new Promise((resolve, reject) => {
     const child = spawn(
       npmCommand,
-      ["install", "--global", "--allow-scripts=oh-my-dm", "oh-my-dm@latest"],
+      ["install", "--global", "--allow-scripts=terminal-dm", "terminal-dm@latest"],
       { stdio: options.silent ? "ignore" : "inherit" },
     );
     child.once("error", reject);

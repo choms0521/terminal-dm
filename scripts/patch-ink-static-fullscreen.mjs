@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// npm may hoist Ink above oh-my-dm instead of installing it in this package's
+// npm may hoist Ink above terminal-dm instead of installing it in this package's
 // own node_modules directory. Resolve Ink with Node's module resolver so the
 // patch works for local, global, nested and hoisted installations alike.
 const inkEntryPath = fileURLToPath(import.meta.resolve("ink"));

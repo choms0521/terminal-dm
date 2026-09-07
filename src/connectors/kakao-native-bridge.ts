@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const SOURCE_PATH = fileURLToPath(new URL("../../scripts/kakao-bridge.swift", import.meta.url));
-const BINARY_PATH = path.join(os.tmpdir(), "oh-my-dm-kakao-bridge");
+const BINARY_PATH = path.join(os.tmpdir(), "terminal-dm-kakao-bridge");
 
 interface BridgeResponse<T> {
   id: number;

@@ -190,6 +190,25 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
     void this.refresh();
   }
 
+  public async sendFile(paths: string[]): Promise<void> {
+    if (!this.activeTitle) throw new Error("KakaoTalk 대화를 먼저 선택하세요.");
+    if (paths.length === 0) throw new Error("전송할 파일 경로가 없습니다.");
+    this.sending = true;
+    try {
+      const result = await this.actionBridge.request<NativeSendResult>("sendFile", {
+        title: this.activeTitle,
+        paths,
+      });
+      if (!result.confirmed) throw new Error("KakaoTalk에서 파일 전송을 확인하지 못했습니다.");
+    } finally {
+      this.sending = false;
+    }
+    // The transfer is already delivered. Reconcile the transcript window without
+    // blocking the UI so the sent file appears in the next read.
+    this.conversationsRefreshedAt = Date.now();
+    void this.refresh();
+  }
+
   public async loadOlderMessages(): Promise<number> {
     if (!this.activeConversationId || !this.activeTitle) return 0;
     const before = this.history.get(this.activeConversationId)?.length ?? 0;

@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { basename, resolve } from "node:path";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
 import stringWidth from "string-width";
@@ -71,7 +74,7 @@ type TranscriptItem =
   | { id: string; kind: "signature"; full: boolean }
   | { id: string; kind: "message"; message: ChatSnapshot["messages"][number] };
 
-const PROJECT_URL = "https://github.com/stacking-money-forever/oh-my-dm";
+const PROJECT_URL = "https://github.com/choms0521/terminal-dm";
 
 export function App({
   connector,
@@ -809,6 +812,33 @@ export function App({
         }
         return;
       }
+      case "file": {
+        const raw = args.join(" ").trim();
+        if (!raw) {
+          setNotice(copy.fileUsage);
+          return;
+        }
+        if (!snapshot.activeConversationId || workspaceCleared) {
+          setNotice(copy.chooseConversationFirst);
+          return;
+        }
+        if (!connector.sendFile) {
+          showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
+          return;
+        }
+        const path = raw.startsWith("~")
+          ? resolve(homedir(), raw.slice(1).replace(/^\/+/, ""))
+          : resolve(raw);
+        const name = basename(path);
+        setNotice(copy.sendingFile(name));
+        try {
+          await connector.sendFile([path]);
+          setNotice(copy.fileSent(name));
+        } catch (error) {
+          showError(error);
+        }
+        return;
+      }
       case "conversations":
         await connector.refresh();
         setConversationFilter("all");
@@ -974,7 +1004,7 @@ export function App({
   if (terminalTooSmall) {
     return (
       <Text color={theme.muted}>
-        {truncateToWidth("oh-my-dm · resize ≥24×10", terminalSize.columns)}
+        {truncateToWidth("terminal-dm · resize ≥24×10", terminalSize.columns)}
       </Text>
     );
   }
@@ -988,7 +1018,7 @@ export function App({
               <Box key={item.id} flexDirection="column" marginTop={1} paddingX={1}>
                 <Text>
                   <Text color={theme.accent}>{" /\\_/\\  "}</Text>
-                  <Text bold>  oh-my-dm</Text>
+                  <Text bold>  terminal-dm</Text>
                   <Text color={theme.muted}> v{APP_VERSION}</Text>
                 </Text>
                 <Text>
@@ -1006,7 +1036,7 @@ export function App({
             ) : (
               <Box key={item.id} flexDirection="column" marginTop={1} paddingX={1}>
                 <Text>
-                  <Text bold color={theme.accent}>oh-my-dm</Text>
+                  <Text bold color={theme.accent}>terminal-dm</Text>
                   <Text color={theme.muted}> v{APP_VERSION}</Text>
                 </Text>
                 <Text> </Text>

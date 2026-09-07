@@ -26,7 +26,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: oh-my-dm version
+      label: terminal-dm version
       placeholder: "0.1.0 or commit SHA"
     validations:
       required: true
@@ -60,5 +60,5 @@ body:
     id: diagnostics
     attributes:
       label: Sanitized diagnostics / 개인정보를 제거한 진단 정보
-      description: Include `oh-my-dm doctor` output if relevant. Do not include chat content.
+      description: Include `terminal-dm doctor` output if relevant. Do not include chat content.
       render: shell

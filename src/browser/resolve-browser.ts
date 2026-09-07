@@ -13,11 +13,11 @@ export function resolveBrowserExecutable(
   bundledPath: string = chromium.executablePath(),
   exists: (filePath: string) => boolean = fs.existsSync,
 ): BrowserExecutable {
-  const configuredBrowser = env.OH_MY_DM_BROWSER ?? env.OH_MY_CHAT_BROWSER;
+  const configuredBrowser = env.TERMINAL_DM_BROWSER;
   if (configuredBrowser) {
     const executablePath = path.resolve(configuredBrowser);
     if (!exists(executablePath)) {
-      throw new Error(`OH_MY_DM_BROWSER 경로를 찾을 수 없습니다: ${executablePath}`);
+      throw new Error(`TERMINAL_DM_BROWSER 경로를 찾을 수 없습니다: ${executablePath}`);
     }
     return { label: "custom Chromium", executablePath };
   }

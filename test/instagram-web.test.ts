@@ -20,7 +20,7 @@ import {
 } from "../src/connectors/instagram-web.js";
 
 test("동시 실행용 Instagram 프로필 복제에서는 Chromium lock을 제외한다", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oh-my-dm-profile-test-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-dm-profile-test-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = path.join(root, "source");
   await fs.mkdir(path.join(source, "Default"), { recursive: true });
@@ -365,11 +365,11 @@ test("tsx로 실행해도 Instagram init script가 DOM 변경을 감지한다", 
   await page.goto("data:text/html,<main></main>");
   await page.evaluate(() => {
     const browserWindow = window as typeof window & {
-      __ohMyDmWake?: () => void;
+      __terminalDmWake?: () => void;
       __wakeCount?: number;
     };
     browserWindow.__wakeCount = 0;
-    browserWindow.__ohMyDmWake = () => {
+    browserWindow.__terminalDmWake = () => {
       browserWindow.__wakeCount = (browserWindow.__wakeCount ?? 0) + 1;
     };
     document.querySelector("main")?.setAttribute("aria-live", "polite");

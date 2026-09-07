@@ -29,8 +29,8 @@ Version 규칙:
 
 npm package 설정에는 다음 GitHub Actions trusted publisher가 등록되어 있어야 합니다.
 
-- Organization 또는 user: `stacking-money-forever`
-- Repository: `oh-my-dm`
+- Organization 또는 user: `choms0521`
+- Repository: `terminal-dm`
 - Workflow: `publish.yml`
 - Environment: `npm`
 - Allowed action: `npm publish`
@@ -80,8 +80,8 @@ Run the repository release automation only after the user explicitly confirms th
 
 The npm package settings must contain this GitHub Actions trusted publisher:
 
-- Organization or user: `stacking-money-forever`
-- Repository: `oh-my-dm`
+- Organization or user: `choms0521`
+- Repository: `terminal-dm`
 - Workflow: `publish.yml`
 - Environment: `npm`
 - Allowed action: `npm publish`

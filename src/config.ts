@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,14 +8,11 @@ export interface AppPaths {
 }
 
 export function getAppPaths(env: NodeJS.ProcessEnv = process.env): AppPaths {
-  const newDefault = path.join(os.homedir(), ".oh-my-dm");
-  const legacyDefault = path.join(os.homedir(), ".oh-my-chat");
-  const configuredDataDir = env.OH_MY_DM_DATA ?? env.OH_MY_CHAT_DATA;
+  const defaultDataDir = path.join(os.homedir(), ".terminal-dm");
+  const configuredDataDir = env.TERMINAL_DM_DATA;
   const dataDir = configuredDataDir
     ? path.resolve(configuredDataDir)
-    : existsSync(newDefault) || !existsSync(legacyDefault)
-      ? newDefault
-      : legacyDefault;
+    : defaultDataDir;
 
   return {
     dataDir,

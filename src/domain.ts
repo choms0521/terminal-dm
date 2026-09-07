@@ -74,6 +74,7 @@ export interface ChatConnector {
   loadOlderMessages(): Promise<number>;
   openConversation(id: string): Promise<void>;
   sendMessage(text: string): Promise<void>;
+  sendFile?(paths: string[]): Promise<void>;
   on<K extends keyof ConnectorEvents>(
     event: K,
     listener: (...args: ConnectorEvents[K]) => void,

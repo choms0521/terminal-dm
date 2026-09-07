@@ -57,7 +57,7 @@ const COPY = {
     historyKeys: "↑/PageUp: 이전 · ↓/PageDown: 최근 · Esc: 돌아가기",
     noUnread: "안 읽은 대화가 없습니다.",
     waitingConversations: "대화 목록을 기다리는 중…",
-    instagramLoginRequired: "Instagram 로그인이 필요합니다. `oh-my-dm login instagram`을 실행하세요.",
+    instagramLoginRequired: "Instagram 로그인이 필요합니다. `terminal-dm login instagram`을 실행하세요.",
     manageConnectors: "Connector 관리",
     chatConnectors: "채팅 connectors",
     storage: "세션 전용 · 메시지는 저장하지 않음",
@@ -78,6 +78,9 @@ const COPY = {
     exit: "종료",
     languageChanged: (label: string) => `language = "${label}"`,
     languageUsage: "사용법: /language [auto|ko|en]",
+    fileUsage: "사용법: /file <파일 경로>",
+    sendingFile: (name: string) => `파일 전송 중: ${name}…`,
+    fileSent: (name: string) => `파일을 전송했습니다: ${name}`,
   },
   en: {
     selectConversation: "Select a conversation",
@@ -111,7 +114,7 @@ const COPY = {
     historyKeys: "↑/PageUp: older · ↓/PageDown: latest · Esc: back",
     noUnread: "No unread conversations.",
     waitingConversations: "Waiting for conversations…",
-    instagramLoginRequired: "Instagram login required. Run `oh-my-dm login instagram`.",
+    instagramLoginRequired: "Instagram login required. Run `terminal-dm login instagram`.",
     manageConnectors: "Manage connectors",
     chatConnectors: "Chat connectors",
     storage: "session only · messages are not persisted",
@@ -132,6 +135,9 @@ const COPY = {
     exit: "Exit",
     languageChanged: (label: string) => `language = "${label}"`,
     languageUsage: "Usage: /language [auto|ko|en]",
+    fileUsage: "Usage: /file <path>",
+    sendingFile: (name: string) => `Sending file: ${name}…`,
+    fileSent: (name: string) => `Sent file: ${name}`,
   },
 } as const;
 
