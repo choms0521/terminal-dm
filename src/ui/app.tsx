@@ -16,6 +16,7 @@ import {
   getSelectionWindow,
   getSlashCommands,
   looksLikeFilePathInput,
+  parseComposedMessage,
   parseSubmission,
   resolveFileToken,
   type SlashCommand,
@@ -109,6 +110,7 @@ export function App({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [previewNotice, setPreviewNotice] = useState<string>();
+  const [sendingComposedMessage, setSendingComposedMessage] = useState(false);
   const [updateInstalled, setUpdateInstalled] = useState(false);
   const [messagesHidden, setMessagesHidden] = useState(false);
   const [workspaceCleared, setWorkspaceCleared] = useState(false);
@@ -174,7 +176,8 @@ export function App({
   // must not reserve another terminal row or the footer leaves a blank line.
   const baseChromeRows = viewMode === "history" ? 5 : 6;
   const commandChromeRows = viewMode === "history" ? 8 : 9;
-  const noticeRows = previewNotice ? wrapTerminalLines(previewNotice, Math.max(1, terminalSize.columns - 2)).length : 0;
+  const visibleNotice = sendingComposedMessage ? copy.sendingComposedMessage : previewNotice;
+  const noticeRows = visibleNotice ? wrapTerminalLines(visibleNotice, Math.max(1, terminalSize.columns - 2)).length : 0;
   const mainHeight = Math.max(
     6,
     terminalSize.rows -
@@ -1071,11 +1074,42 @@ export function App({
     const parsed = parseSubmission(value);
     if (parsed.kind === "empty") return;
 
+    const segments = parseComposedMessage(value);
     if (looksLikeFilePathInput(value)) {
       leaveCommandScreenImmediately();
       setInput("");
       setError(undefined);
       void sendFilePaths(value.trim()).catch(showError);
+      return;
+    }
+
+    const mixed = segments.some((segment) => segment.kind === "text")
+      && segments.some((segment) => segment.kind === "files");
+    // Existing commands retain priority; an absolute file path may also begin with /.
+    if (mixed && (parsed.kind !== "command"
+      || (!findSlashCommand(parsed.name) && segments[0]?.kind === "files"))) {
+      leaveCommandScreenImmediately();
+      setInput("");
+      setError(undefined);
+      if (!snapshot.activeConversationId || workspaceCleared) {
+        setNotice(copy.chooseConversationFirst);
+        return;
+      }
+      if (!connector.sendFile) {
+        showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
+        return;
+      }
+      const sendFile = connector.sendFile.bind(connector);
+      setMessagesHidden(false);
+      setMessageOffset(0);
+      setViewMode("chat");
+      setSendingComposedMessage(true);
+      void (async () => {
+        for (const segment of segments) {
+          if (segment.kind === "text") await connector.sendMessage(segment.text);
+          else await sendFile(segment.paths);
+        }
+      })().catch(showError).finally(() => setSendingComposedMessage(false));
       return;
     }
 
@@ -1524,7 +1558,7 @@ export function App({
         </Text>
       )}
       {error && <Text color={theme.danger}>error: {error}</Text>}
-      {previewNotice && <Text color={theme.muted} wrap="wrap">{previewNotice}</Text>}
+      {visibleNotice && <Text color={theme.muted} wrap="wrap">{visibleNotice}</Text>}
       </Box>
     </>
   );

@@ -79,6 +79,10 @@ export function parseSubmission(value: string): ParsedSubmission {
  * the caller to expand.
  */
 export function tokenizeFileArgs(raw: string): string[] {
+  return tokenizeArgs(raw);
+}
+
+function tokenizeArgs(raw: string, literalWordApostrophes = false): string[] {
   const tokens: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
@@ -108,6 +112,9 @@ export function tokenizeFileArgs(raw: string): string[] {
     }
     if (ch === "\\") {
       escaped = true;
+    } else if (ch === "'" && literalWordApostrophes && current.length > 0) {
+      // Composed text can contain contractions; file arguments keep shell quoting.
+      current += ch;
     } else if (ch === '"' || ch === "'") {
       quote = ch;
     } else if (/\s/.test(ch)) {
@@ -134,6 +141,39 @@ function defaultIsFile(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+export type ComposedMessageSegment =
+  | { kind: "text"; text: string }
+  | { kind: "files"; paths: string[] };
+
+/** Splits composed input into consecutive text and existing file groups. */
+export function parseComposedMessage(
+  raw: string,
+  isFile: (path: string) => boolean = defaultIsFile,
+): ComposedMessageSegment[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("//")) return [{ kind: "text", text: trimmed.slice(1) }];
+
+  const segments: ComposedMessageSegment[] = [];
+  let hasFiles = false;
+  for (const token of tokenizeArgs(trimmed, true)) {
+    const path = /^(\/|~\/|\.{1,2}\/)/.test(token) ? resolveFileToken(token) : undefined;
+    const previous = segments.at(-1);
+    if (path !== undefined && isFile(path)) {
+      hasFiles = true;
+      if (previous?.kind === "files") previous.paths.push(path);
+      else segments.push({ kind: "files", paths: [path] });
+    } else if (previous?.kind === "text") {
+      previous.text += ` ${token}`;
+    } else {
+      segments.push({ kind: "text", text: token });
+    }
+  }
+
+  // Preserve ordinary messages exactly, including quotes and internal whitespace.
+  return hasFiles ? segments : [{ kind: "text", text: trimmed }];
 }
 
 /**

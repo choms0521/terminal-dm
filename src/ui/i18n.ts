@@ -93,6 +93,7 @@ const COPY = {
     sendingFile: (name: string) => `파일 전송 중: ${name}…`,
     fileSent: (name: string) => `파일을 전송했습니다: ${name}`,
     sendingFiles: (count: number) => `파일 ${count}개 전송 중…`,
+    sendingComposedMessage: "메시지와 이미지를 순서대로 전송 중…",
     filesSent: (count: number) => `파일 ${count}개를 전송했습니다`,
   },
   en: {
@@ -163,6 +164,7 @@ const COPY = {
     sendingFile: (name: string) => `Sending file: ${name}…`,
     fileSent: (name: string) => `Sent file: ${name}`,
     sendingFiles: (count: number) => `Sending ${count} files…`,
+    sendingComposedMessage: "Sending message and images…",
     filesSent: (count: number) => `Sent ${count} files`,
   },
 } as const;
