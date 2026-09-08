@@ -1,6 +1,6 @@
 {
   "name": "terminal-dm",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "DM without looking like you're DMing — a discreet Agent CLI-style TUI messenger.",
   "license": "Apache-2.0",
   "author": "mscho <choms0521@gmail.com>",
