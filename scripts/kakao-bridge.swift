@@ -635,10 +635,15 @@ final class KakaoAccessibility {
       ) else { throw BridgeError.message("KakaoTalk 입력 이벤트를 만들지 못했습니다.") }
       event.postToPid(processIdentifier)
     }
-    usleep(100_000)
-    guard stringAttribute(input, kAXValueAttribute as CFString) == text else {
-      throw BridgeError.message("KakaoTalk 입력 내용을 안전하게 준비하지 못했습니다.")
-    }
+    // The space/backspace key events are delivered asynchronously, so the input
+    // value settles back to `text` after a short, variable delay. Poll until it
+    // matches instead of checking once, which was racy under rapid sends.
+    let verifyDeadline = Date().addingTimeInterval(1.5)
+    repeat {
+      if stringAttribute(input, kAXValueAttribute as CFString) == text { return }
+      usleep(50_000)
+    } while Date() < verifyDeadline
+    throw BridgeError.message("KakaoTalk 입력 내용을 안전하게 준비하지 못했습니다.")
   }
 
   func send(windowTitle: String, text: String) throws -> [String: Bool] {

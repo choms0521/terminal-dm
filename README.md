@@ -140,7 +140,8 @@ terminal-dm은 메시지를 저장하지 않지만 동작을 위해 일부 로�
 ```text
 /help
 /open <대화방 이름>
-/file <경로>
+/file <경로> [<경로> …]
+/preview
 /conversations
 /unread
 /all
@@ -159,7 +160,11 @@ terminal-dm은 메시지를 저장하지 않지만 동작을 위해 일부 로�
 
 `/open`은 대화방 이름이 하나로 특정되어야 합니다. 표시 이름이 같은 대화방이 여러 개라면 `/conversations`에서 올바른 행을 직접 선택하세요. `/unread`와 `/all`은 대화 목록 filter만 변경하며 원본 서비스의 읽음 상태는 바꾸지 않습니다.
 
-`/file <경로>`는 지정한 로컬 파일을 현재 열려 있는 대화방으로 전송합니다. 경로에 공백이 있어도 따옴표 없이 그대로 입력하면 됩니다. 이 기능은 KakaoTalk connector 전용이며, 네이티브 KakaoTalk 손쉬운 사용 bridge를 통해 파일 URL을 입력창에 붙여 넣은 뒤 파일 전송 대화상자의 `N개 전송` 확인 버튼을 눌러 전송합니다. 파일 전송을 지원하지 않는 connector에서는 지원하지 않는다는 안내를 표시합니다.
+`/file <경로>`는 지정한 로컬 파일을 현재 열려 있는 대화방으로 전송합니다. 여러 파일을 공백으로 구분해 한 번에 보낼 수 있고, 공백이 포함된 경로는 따옴표로 감싸거나 역슬래시로 이스케이프하면 됩니다. 입력창에 파일을 드래그해 놓고 그대로 전송해도 됩니다(경로가 실제 파일을 가리키면 `/file` 없이도 전송). 이 기능은 KakaoTalk connector 전용이며, 네이티브 KakaoTalk 손쉬운 사용 bridge를 통해 파일 URL을 입력창에 붙여 넣은 뒤 파일 전송 대화상자의 `N개 전송` 확인 버튼을 눌러 전송합니다. 파일 전송을 지원하지 않는 connector에서는 지원하지 않는다는 안내를 표시합니다.
+
+`/preview`(또는 `/p`)는 현재 KakaoTalk 대화창 화면에 보이는 사진·이모티콘을 한 번에 갤러리로 렌더링합니다. Ink 화면을 잠시 멈추고 이미지를 위에서 아래 순서로 표시한 뒤, 아무 키나 누르면 채팅으로 돌아옵니다. 이미지는 KakaoTalk 창을 창 단위로 캡처해 각 말풍선을 잘라 렌더링하며(창을 앞으로 가져오지 않음), 임시 파일은 표시 직후 삭제합니다. 화면에 완전히 보이는 말풍선만 캡처되므로, 더 많은 이미지를 보려면 KakaoTalk에서 스크롤해 화면에 놓고 다시 실행하세요. Kitty 그래픽 프로토콜을 지원하는 터미널(Ghostty, Kitty, WezTerm)과 macOS 화면 기록·손쉬운 사용 권한이 필요하며, 지원하지 않는 터미널이나 권한이 없을 때는 안내를 표시합니다. 동영상은 손쉬운 사용 트리에서 사진과 구분되지 않아 썸네일로 표시됩니다.
+
+입력창에서 텍스트와 이미지 경로를 섞어 보낼 수도 있습니다. 예를 들어 `안녕하세요 ~/photo.png 이거 봐봐`처럼 입력하면 텍스트 → 이미지 → 텍스트 순서대로 전송되어, 대화창에 세 개의 메시지로 차례대로 나타납니다(KakaoTalk은 한 말풍선에 텍스트와 이미지를 함께 담지 못합니다). 실제 파일을 가리키는 경로 토큰만 이미지로 처리하고 나머지는 텍스트로 보냅니다.
 
 ### 업데이트 및 제거
 
@@ -338,7 +343,8 @@ Type `/` to open the command palette. Navigate with arrow keys, press `Tab` to a
 ```text
 /help
 /open <conversation name>
-/file <path>
+/file <path> [<path> …]
+/preview
 /conversations
 /unread
 /all
@@ -357,7 +363,11 @@ To send a regular message beginning with `/`, type it with two slashes, such as 
 
 `/open` requires a unique conversation-name match. If several conversations have the same display name, use `/conversations` and select the correct row instead. `/unread` and `/all` change the conversation-list filter; they do not alter read state on the original service.
 
-`/file <path>` sends the given local file to the conversation that is currently open. The path may contain spaces without quoting. This command is KakaoTalk-only: it uses the native KakaoTalk accessibility bridge to paste the file URL into the composer and then presses the `N개 전송` confirm button in the file-transfer dialog. Connectors that do not support file transfer report that it is unsupported.
+`/file <path>` sends the given local file to the conversation that is currently open. You can send several files at once by separating them with spaces, and a path that contains spaces can be quoted or backslash-escaped. You can also drag a file into the composer and send it as-is (a path that points to a real file is sent even without `/file`). This command is KakaoTalk-only: it uses the native KakaoTalk accessibility bridge to paste the file URL into the composer and then presses the `N개 전송` confirm button in the file-transfer dialog. Connectors that do not support file transfer report that it is unsupported.
+
+`/preview` (or `/p`) renders every photo/sticker currently visible in the KakaoTalk chat window as an inline gallery. It briefly suspends the Ink screen, shows the images top-to-bottom, and returns to the chat when you press any key. Images are obtained by capturing the KakaoTalk window by its window id (it is not brought to the front) and cropping each bubble; the temporary files are deleted right after rendering. Only bubbles fully visible on screen are captured, so scroll the images into view in KakaoTalk and run it again to see more. It requires a terminal that supports the Kitty graphics protocol (Ghostty, Kitty, WezTerm) and macOS Screen Recording and Accessibility permission, and shows a notice on unsupported terminals or when permission is missing. Videos appear as thumbnails because Accessibility does not distinguish them from photos.
+
+You can also mix text and image paths in the composer. Typing something like `Hi ~/photo.png look at this` sends text, then the image, then text — appearing as three messages in order (KakaoTalk cannot put text and an image in one bubble). Only path tokens that point to a real file are treated as images; everything else is sent as text.
 
 ### Update and uninstall
 
