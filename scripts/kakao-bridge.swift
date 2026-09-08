@@ -279,7 +279,6 @@ final class KakaoAccessibility {
       throw BridgeError.message("KakaoTalk 대화창 좌표를 읽지 못했습니다.")
     }
     let (_, _, rows) = try messageRows(in: chatWindow)
-    let images = imageRows(in: rows)
     let windowLimit = max(1, min(20, limit))
     // KakaoTalk gives photos, videos and large emoticons their own rows, but
     // those rows usually have no readable text area. Counting raw rows first
@@ -349,12 +348,8 @@ final class KakaoAccessibility {
       var entry: [String: String] = [
         "text": isEdited ? "\(messageText) (수정됨)" : messageText,
         "sender": sender,
-        "previewImageCount": String(images.count),
       ]
       if let messageKind { entry["kind"] = messageKind }
-      if let imageIndex = images.firstIndex(where: { CFEqual($0.row, row) }) {
-        entry["previewIndex"] = String(imageIndex)
-      }
       output.append(entry)
     }
     return output
@@ -368,10 +363,9 @@ final class KakaoAccessibility {
     return (scrollArea, table, children(of: table).filter { role(of: $0) == kAXRowRole as String })
   }
 
-  // Indices cover all accessible image/sticker rows, including rows outside the
-  // requested message window, and start at the bottom of the message table.
+  // Include accessible image/sticker rows; the gallery filters by viewport.
   private func imageRows(in rows: [AXUIElement]) -> [(row: AXUIElement, image: AXUIElement)] {
-    rows.reversed().compactMap { row in
+    rows.compactMap { row in
       guard readableMessageText(in: row) == nil,
             let media = mediaMarker(in: row),
             media.kind == "image" || media.kind == "sticker" else { return nil }
@@ -398,89 +392,26 @@ final class KakaoAccessibility {
     return rect
   }
 
-  private func revealImage(row: AXUIElement, in scrollArea: AXUIElement, window: AXUIElement) -> AXUIElement? {
-    _ = AXUIElementPerformAction(row, "AXScrollToVisible" as CFString)
-    usleep(250_000)
-    for _ in 0..<8 {
-      guard let media = mediaMarker(in: row), media.kind == "image" || media.kind == "sticker" else { return nil }
-      if visibleImageRect(media.anchor, in: scrollArea, window: window) != nil { return media.anchor }
-      _ = AXUIElementPerformAction(media.anchor, "AXScrollToVisible" as CFString)
-      usleep(100_000)
-      if visibleImageRect(media.anchor, in: scrollArea, window: window) != nil { return media.anchor }
-      guard let rect = screenRect(of: media.anchor), let viewport = screenRect(of: scrollArea),
-            let scrollBar = children(of: scrollArea).first(where: { role(of: $0) == kAXScrollBarRole as String }),
-            let current = (attribute(scrollBar, kAXValueAttribute as CFString) as? NSNumber)?.doubleValue else { return nil }
-      // Keep the selected AX row rather than resolving its index again after
-      // scrolling, since loading older messages can change the available rows.
-      let delta = rect.minY < viewport.minY ? -0.15 : 0.15
-      let next = max(0, min(1, current + delta))
-      guard next != current else { return nil }
-      do { try setAttribute(scrollBar, kAXValueAttribute as CFString, NSNumber(value: next)) }
-      catch { return nil }
-      usleep(250_000)
-    }
-    guard let media = mediaMarker(in: row),
-          visibleImageRect(media.anchor, in: scrollArea, window: window) != nil else { return nil }
-    return media.anchor
-  }
-
-  func captureMessageImage(windowTitle: String, selector: Any, expectedImageCount: Int?) -> [String: Any] {
-    let isLatest = (selector as? String) == "latest"
-    let index: Int
-    if isLatest { index = 0 }
-    else if let number = selector as? NSNumber,
-            CFGetTypeID(number) != CFBooleanGetTypeID(),
-            number.doubleValue.isFinite, number.doubleValue >= 0,
-            number.doubleValue < Double(Int.max), number.doubleValue.rounded(.down) == number.doubleValue {
-      index = number.intValue
-    } else { return ["unavailable": "invalid-selector"] }
-
+  func captureVisibleImages(windowTitle: String) -> [String: Any] {
     guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
       return ["unavailable": "permission-denied"]
     }
     do {
       let chatWindow = try window(named: windowTitle)
       let (scrollArea, _, rows) = try messageRows(in: chatWindow)
-      let images = imageRows(in: rows)
-      // Note: a caller-supplied expectedImageCount is intentionally not compared
-      // against images.count here — the UI counts images only within its loaded
-      // message window while this walks every currently loaded AX row, so the
-      // totals legitimately differ. Both count images from the bottom, so the
-      // index still maps to the same image for the selectable (recent) range.
-      _ = expectedImageCount
-      guard !images.isEmpty else { return ["unavailable": "no-image"] }
-      guard index < images.count else { return ["unavailable": "not-visible"] }
-      let target = images[index]
-      var image = target.image
-      // Only the currently rendered bubbles can be captured. If the target is
-      // scrolled out of the message viewport, try to scroll it into view.
-      if visibleImageRect(image, in: scrollArea, window: chatWindow) == nil, !isLatest {
-        guard let revealed = revealImage(row: target.row, in: scrollArea, window: chatWindow) else {
-          return ["unavailable": "not-visible"]
-        }
-        image = revealed
+      let bubbleRects = imageRows(in: rows).compactMap {
+        visibleImageRect($0.image, in: scrollArea, window: chatWindow)
+      }.sorted {
+        $0.minY == $1.minY ? $0.minX < $1.minX : $0.minY < $1.minY
       }
-      guard let bubbleRect = visibleImageRect(image, in: scrollArea, window: chatWindow),
-            let windowRect = screenRect(of: chatWindow),
+      guard !bubbleRects.isEmpty else { return ["images": [[String: Any]]()] }
+      guard let windowRect = screenRect(of: chatWindow),
             let windowNumber = onScreenWindowID(pid: try runningApplication.processIdentifier, bounds: windowRect) else {
         return ["unavailable": "not-visible"]
       }
 
-      // mkstemps creates a unique mode-0600 file for the cropped result.
-      // Ownership transfers to the caller only after a valid PNG is written.
-      let template = FileManager.default.temporaryDirectory.appendingPathComponent("terminal-dm-preview-XXXXXX.png").path
-      var pathBuffer = Array(template.utf8CString)
-      let descriptor = mkstemps(&pathBuffer, 4)
-      guard descriptor >= 0 else { return ["unavailable": "capture-failed"] }
-      close(descriptor)
-      let path = String(cString: pathBuffer)
-      var transferred = false
-      defer { if !transferred { try? FileManager.default.removeItem(atPath: path) } }
-
-      // Capture the KakaoTalk window by its window id, which grabs the window's
-      // pixels regardless of z-order or which app is frontmost — so there is no
-      // need to raise/activate it (activation is unreliable from a background
-      // process) and no focus flash. Then crop the bubble out of the window shot.
+      // Capture the window once, regardless of z-order, without activation or
+      // raising it. All gallery crops come from this same frame.
       let windowShot = FileManager.default.temporaryDirectory.appendingPathComponent("terminal-dm-window-XXXXXX.png").path
       var shotBuffer = Array(windowShot.utf8CString)
       let shotDescriptor = mkstemps(&shotBuffer, 4)
@@ -503,24 +434,46 @@ final class KakaoAccessibility {
             windowImage.width > 0, windowRect.width > 0 else {
         return ["unavailable": CGPreflightScreenCaptureAccess() ? "capture-failed" : "permission-denied"]
       }
-      // The window shot's pixel (0,0) is the window's top-left, so the bubble's
-      // crop is its window-relative offset scaled by the shot's pixels-per-point.
-      let scale = CGFloat(windowImage.width) / windowRect.width
-      let cropRect = CGRect(
-        x: ((bubbleRect.minX - windowRect.minX) * scale).rounded(.down),
-        y: ((bubbleRect.minY - windowRect.minY) * scale).rounded(.down),
-        width: (bubbleRect.width * scale).rounded(.toNearestOrAwayFromZero),
-        height: (bubbleRect.height * scale).rounded(.toNearestOrAwayFromZero))
-        .intersection(CGRect(x: 0, y: 0, width: windowImage.width, height: windowImage.height))
-      guard !cropRect.isNull, cropRect.width > 0, cropRect.height > 0,
-            let cropped = windowImage.cropping(to: cropRect),
-            let pngData = NSBitmapImageRep(cgImage: cropped).representation(using: .png, properties: [:]) else {
-        return ["unavailable": "capture-failed"]
+
+      var images: [[String: Any]] = []
+      var cropPaths: [String] = []
+      var transferred = false
+      defer {
+        if !transferred {
+          for path in cropPaths { try? FileManager.default.removeItem(atPath: path) }
+        }
       }
-      do { try pngData.write(to: URL(fileURLWithPath: path)) }
-      catch { return ["unavailable": "capture-failed"] }
+      // The shot's origin is the window's top-left. Convert point offsets into
+      // pixels using the same scale for every crop, then clamp to the shot.
+      let scale = CGFloat(windowImage.width) / windowRect.width
+      let imageBounds = CGRect(x: 0, y: 0, width: windowImage.width, height: windowImage.height)
+      for bubbleRect in bubbleRects {
+        let cropRect = CGRect(
+          x: ((bubbleRect.minX - windowRect.minX) * scale).rounded(.down),
+          y: ((bubbleRect.minY - windowRect.minY) * scale).rounded(.down),
+          width: (bubbleRect.width * scale).rounded(.toNearestOrAwayFromZero),
+          height: (bubbleRect.height * scale).rounded(.toNearestOrAwayFromZero))
+          .intersection(imageBounds)
+        guard !cropRect.isNull, cropRect.width > 0, cropRect.height > 0,
+              let cropped = windowImage.cropping(to: cropRect),
+              let pngData = NSBitmapImageRep(cgImage: cropped).representation(using: .png, properties: [:]) else {
+          return ["unavailable": "capture-failed"]
+        }
+
+        // Each crop uses a unique mode-0600 file. Transfer ownership to the UI
+        // only after the complete gallery succeeds; failures remove all crops.
+        let template = FileManager.default.temporaryDirectory.appendingPathComponent("terminal-dm-preview-XXXXXX.png").path
+        var pathBuffer = Array(template.utf8CString)
+        let descriptor = mkstemps(&pathBuffer, 4)
+        guard descriptor >= 0 else { return ["unavailable": "capture-failed"] }
+        close(descriptor)
+        let path = String(cString: pathBuffer)
+        cropPaths.append(path)
+        try pngData.write(to: URL(fileURLWithPath: path))
+        images.append(["path": path, "width": cropped.width, "height": cropped.height])
+      }
       transferred = true
-      return ["path": path, "width": cropped.width, "height": cropped.height]
+      return ["images": images]
     } catch {
       return ["unavailable": "capture-failed"]
     }
@@ -904,8 +857,8 @@ while let line = readLine() {
     case "doubleClick": try kakao.doubleClick(x: command["x"] as? Double ?? 0, y: command["y"] as? Double ?? 0); respond(id: id, result: [:])
     case "waitForWindow": try kakao.waitForWindow(expectedTitle: command["title"] as? String ?? ""); respond(id: id, result: [:])
     case "messages": respond(id: id, result: try kakao.messages(windowTitle: command["title"] as? String ?? "", direction: command["direction"] as? String ?? "newer", limit: command["limit"] as? Int ?? 15))
-    case "captureMessageImage":
-      respond(id: id, result: kakao.captureMessageImage(windowTitle: command["title"] as? String ?? "", selector: command["selector"] ?? "latest", expectedImageCount: command["expectedImageCount"] as? Int))
+    case "captureVisibleImages":
+      respond(id: id, result: kakao.captureVisibleImages(windowTitle: command["title"] as? String ?? ""))
     case "prepareComposer": try kakao.prepareComposer(windowTitle: command["title"] as? String ?? ""); respond(id: id, result: [:])
     case "send": respond(id: id, result: try kakao.send(windowTitle: command["title"] as? String ?? "", text: command["text"] as? String ?? ""))
     case "sendFile":

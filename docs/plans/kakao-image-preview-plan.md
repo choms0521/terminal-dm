@@ -1,168 +1,80 @@
-# KakaoTalk inline image preview — implementation plan
+# KakaoTalk visible image gallery
 
-Status: planned (staged). Follows the spike findings in
-`received-media-terminal-preview.md`.
+Status: implemented on `feat/kakao-image-preview`; live GUI verification pending.
+This supersedes the previous latest-image and message-cursor selection plan.
 
-## Goal
+## Behavior
 
-Let the user preview a received/visible KakaoTalk image (photo or sticker)
-inline in the terminal-dm TUI, rendered with the Kitty graphics protocol.
-Delivered in two stages:
+- `/preview` and `/p` show all currently visible photo/sticker bubbles in the
+  active KakaoTalk chat, ordered top-to-bottom.
+- Arguments are unsupported. `select`, `latest`, and numeric selection have
+  been removed along with the message cursor and native preview index/count data.
+- Chat text and photo/sticker markers remain unchanged. Videos still appear as
+  thumbnails because Accessibility does not distinguish them from photos.
+- Existing visibility checks require the entire bubble to fit in the chat
+  viewport, window, and an active display. Partially clipped bubbles are skipped.
+- No scrolling, window activation, or raising occurs during capture.
 
-- **Stage 1** — `/preview`: preview the most recent image in the active
-  conversation.
-- **Stage 2** — message-cursor selection: move a cursor over messages and
-  preview the selected image, scrolling KakaoTalk into view when needed.
+## Bridge
 
-## What is already proven
+`captureVisibleImages` takes the active window title (`title` in the JSON RPC).
+It checks `AXIsProcessTrusted()` and `CGPreflightScreenCaptureAccess()` before
+accessing the chat. Missing permission returns `permission-denied`.
 
-- **Rendering**: JPEG/PNG → (sips → PNG) → base64 → Kitty graphics escape
-  renders inline in Ghostty (the user's terminal). Verified end to end.
-- **Kinds**: the bridge already tags photo (`image` → "(사진)"), sticker
-  (`sticker` → "(이모티콘)"), and file attachments ("(파일: name)"). Videos are
-  indistinguishable from photos over Accessibility and stay `image`.
-- **Path spike**: AX exposes no image path; `Finder에서 보기` yields an exact
-  path but only for file attachments and pops Finder; the temp cache is
-  content-hashed with no per-message/per-conversation mapping. Conclusion:
-  photos/stickers must be obtained by **capturing the on-screen bubble region**.
+The action uses `imageRows(in:)` and `visibleImageRect(_:in:window:)`, sorts the
+resulting rectangles by vertical position, and returns `{ images: [] }` if none
+qualify. It resolves the on-screen window id using `onScreenWindowID(pid:bounds:)`
+and runs `/usr/sbin/screencapture -x -o -l <windowID> <temp>` exactly once through
+`Process` with array arguments. This captures the window regardless of z-order.
 
-## Hard constraints (apply to every stage)
+One `NSBitmapImageRep` supplies the source image for every crop. The scale is
+`windowImage.width / windowRect.width`; each bubble rectangle is translated to
+window-relative coordinates, scaled, and intersected with image bounds.
+Each crop becomes its own `mkstemps` mode-0600 PNG. The whole-window screenshot
+is always removed. A failed batch removes all crops already created; success
+returns `{ images: [{ path, width, height }, ...] }` and transfers file ownership.
 
-1. **On-screen only.** Capturing pixels requires the target bubble to be
-   currently visible in the KakaoTalk chat window. A message scrolled out of
-   view cannot be captured unless KakaoTalk is first scrolled to it (Stage 2).
-2. **Screen Recording permission.** `screencapture` of window contents needs the
-   macOS Screen Recording permission for the host process (one-time grant). The
-   feature must fail with a clear message when it is not granted.
-3. **Privacy / ephemeral.** The project persists no media. The captured image
-   goes to a temp file that is deleted immediately after it is rendered; nothing
-   durable is written.
-4. **Terminal capability.** Only terminals that speak the Kitty graphics
-   protocol can render. Detect capability and fall back to a text notice
-   ("this terminal cannot show images") otherwise.
-5. **Video limitation.** Videos render as their thumbnail (same as a photo);
-   there is no separate video handling.
+The former `captureMessageImage` action and scroll-to-selection helper are gone.
 
-## Architecture
+## Connector and file ownership
 
-Three layers, mirroring the existing send/messages flow.
+`ChatConnector.previewImages?()` returns `ImageGalleryResult`:
+`{ images: ImagePreview[] } | { unavailable: string }`. KakaoTalk implements it;
+`UnifiedChatConnector` delegates to the active connector or reports unsupported.
+Capture waits for an outstanding native refresh and rejects concurrent actions.
+If shutdown or a conversation change abandons a result, the connector deletes
+its crops. Otherwise the UI deletes every returned file in `finally`, including
+files not reached when rendering fails. The shutdown path waits for capture
+and abandoned-result cleanup before stopping the action bridge.
 
-### 1. Swift bridge — a `captureMessageImage` action
+## Terminal handoff
 
-- Input: the chat window title, plus a selector for *which* image bubble
-  (Stage 1: "latest"; Stage 2: an index among image/sticker bubbles from the
-  bottom, matching the order `messages()` returns).
-- Locate the target bubble's `AXImage` in the chat window's message table (reuse
-  the row-walking and `mediaMarker` logic already in `messages()`), read its
-  screen rect (`AXPosition` + `AXSize`).
-- Capture just that window's pixels without stealing focus, using
-  `screencapture -l <CGWindowID> -o -x <tmp>.png` (window capture, no shadow,
-  no sound), then crop the bubble rect from the window image — OR
-  `screencapture -R x,y,w,h -o -x <tmp>.png` if window-id capture proves
-  awkward. Prefer window capture so KakaoTalk need not be frontmost.
-  (**Spike required — see Stage 0.**)
-- Return the temp PNG path (and the bubble's pixel size for sizing the render).
-- If the bubble is not on screen (no rect, or zero size), return a
-  "not visible" result so the UI can explain instead of capturing the wrong
-  region.
+The terminal probe and Kitty encoder remain in `src/ui/terminal-image.ts`.
+Unsupported terminals are rejected before capture. Empty results and permission,
+busy, unavailable-window, or capture failures produce localized notices.
 
-### 2. TS connector — an optional capability
+After flushing pending output, `App` uses Ink 7's `useApp().suspendTerminal()`
+handle to release rendering and input while retaining the mounted React tree and
+connector subscriptions. The gallery clears the screen, writes each PNG through
+Kitty with an index and blank spacing, and waits for a key after a localized hint.
+Rows are reserved before image placement so `C=1` cannot clip an image at the
+bottom edge. A tall gallery uses the terminal's normal scrollback.
 
-- Add `previewImage?(selector): Promise<{ path: string; width: number;
-  height: number } | { unavailable: reason }>` to the connector interface
-  (only KakaoTalk implements it), calling the bridge action.
-- The connector owns temp-file lifetime: hand the path to the renderer, then
-  delete it.
+A temporary raw-input reader consumes the dismissal chunk and restores its modes
+and listeners on keypress, end-of-input, error, or abort. Gallery image ids are
+explicitly deleted from the terminal when the view closes. The UI resumes Ink
+and increments the Static transcript epoch to replay chat history. Resize redraws
+are suppressed while preview owns the terminal. Unmount aborts the wait and
+cleans files without reattaching Ink input to an exited app.
 
-### 3. TUI — command, rendering, and Ink integration
+## Verification
 
-- **Terminal probe**: detect Kitty support (`TERM`/`TERM_PROGRAM`, e.g.
-  `ghostty`, `xterm-kitty`, `WezTerm`); expose `image: "kitty" | "none"`.
-- **Kitty renderer**: pure function `bytes → escape string`, chunked at 4096
-  base64 chars, sized to a sensible column width. Unit-testable.
-- **Ink integration (the tricky part)**: Ink owns the screen and redraws on
-  every state change, which will erase a raw image escape. Options to evaluate,
-  cheapest first:
-  1. Write the escape once directly to `stdout` *below* the current Ink frame
-     and let it scroll into the transcript (simplest; image stays in scrollback).
-  2. Briefly suspend Ink rendering, emit the image, resume.
-  3. Use the Kitty protocol's placement/placeholder so Ink text can coexist.
-  Start with (1); it matches how the app already does raw writes
-  (`write("[2J…")`).
-
-## Stage 0 — capture spike — DONE (resolved)
-
-Verified in the real GUI environment (Claude Code session, which has
-Accessibility + Screen Recording). Region capture of a specific bubble works:
-
-1. Find the target image bubble's `AXImage` (reuse the `messages()` /
-   `mediaMarker` row walk). Read its screen rect via `AXPosition` + `AXSize`
-   (points, top-left origin).
-2. Raise the chat window (`AXRaise` + `NSRunningApplication.activate()`, ~500ms
-   settle) so the bubble is not occluded by the terminal.
-3. `/usr/sbin/screencapture -x -R "<x>,<y>,<w>,<h>" -o <tmp>.png`
-   (`-x` silent, `-R` region, `-o` no shadow). On a Retina display the PNG is 2x
-   the point size (a 212x132pt bubble → 424x264px), and the file carries real
-   image content (~57KB, not a blank frame). Confirmed on a real photo bubble.
-
-Notes:
-- Region capture requires the bubble on screen and KakaoTalk raised (a brief
-  focus flash). Window-id capture (`screencapture -l <CGWindowID>`) + crop could
-  avoid the flash later, but region capture is proven and is the baseline.
-- **This step cannot be verified inside the Codex sandbox** (no display access:
-  `screencapture` reports "does not intersect any displays"). Runtime GUI
-  verification is done by the coordinator, not Codex.
-
-## Stage 1 — `/preview` most recent image
-
-1. Bridge `captureMessageImage` with selector "latest": the last
-   image/sticker bubble in the current chat.
-2. Connector `previewImage("latest")`.
-3. `/preview` slash command (+ alias) in `slash-commands.ts`; i18n copy for
-   "capturing…", "shown", "not visible", "terminal unsupported",
-   "no image in this conversation".
-4. Terminal probe + Kitty renderer; emit below the Ink frame.
-5. Temp file deleted after render.
-
-Acceptance: with an image visible at the bottom of the active KakaoTalk chat,
-`/preview` shows it inline in Ghostty; unsupported terminals and missing
-permission give clear notices; no temp file remains.
-
-## Stage 2 — message-cursor selection
-
-1. Message-selection mode in the TUI (reuse `selectedIndex` /
-   `getSelectionWindow` / `wrapSelectionIndex` patterns): arrow keys move a
-   highlight over the message window; a key (or `/preview` with the cursor
-   active) previews the selected message when it is an image/sticker.
-2. Map the selected TUI message to the bridge selector — an index among
-   image/sticker messages counted from the bottom, consistent with
-   `messages()` ordering.
-3. Scroll-into-view: if the selected bubble is not on screen, ask the bridge to
-   scroll the KakaoTalk message table to that row (reuse `scrollOlder`-style
-   AX scrolling) before capturing; if it still cannot be shown, report "not
-   visible".
-
-Acceptance: selecting any image message in the current window previews that
-specific image; selecting a text message does nothing (or a hint); off-screen
-selections are scrolled into view or clearly reported.
-
-## Testing / verification
-
-- Unit tests (TS): terminal-capability probe; Kitty escape generation
-  (chunking, size); selector index math.
-- Manual/live: Stage 1 and Stage 2 acceptance above, in Ghostty.
-- Bridge changes verified via `swiftc` compile + a live capture check, as with
-  the existing send/messages work.
-
-## Open questions
-
-- Exact `screencapture` invocation (window-id capture + crop vs region) —
-  resolved by Stage 0.
-- Render sizing: fixed column width vs. proportional to the bubble's pixel size.
-- Whether Stage 2's scroll-into-view is reliable enough, or should be deferred.
-
-## Out of scope
-
-- Instagram preview (separate connector path).
-- Video playback or a distinct video marker (AX cannot distinguish videos).
-- Persisting or exporting media.
+- Compile: `CLANG_MODULE_CACHE_PATH=/tmp/tdm-mc swiftc scripts/kakao-bridge.swift -o /tmp/tdm-bridge-check`.
+- Run `npm run build`, `npm run typecheck`, and `npm test`.
+- Automated tests cover gallery order, Kitty encoding, file cleanup, capture
+  races, unsupported/empty/error results, input isolation, snapshot/resize
+  silence, transcript restoration, and unmount cleanup using fake connectors.
+- Live acceptance still requires a logged-in KakaoTalk chat and a Kitty-capable
+  terminal: inspect photo/sticker crops, chronological order, tall-gallery
+  scrollback, Retina scaling, and return to the normal TUI. Automated terminal
+  stream checks do not establish actual GUI pixel or terminal rendering quality.

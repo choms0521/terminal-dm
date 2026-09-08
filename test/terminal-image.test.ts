@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { PassThrough } from "node:stream";
 
 import {
   generateKittyImage,
   getPreviewSize,
   getTerminalImageCapability,
-  renderImagePreview,
+  deleteImagePreviews,
+  renderImageGallery,
+  waitForGalleryKey,
 } from "../src/ui/terminal-image.js";
 
 test("terminal capability recognizes supported names in either environment field", () => {
@@ -70,53 +73,73 @@ test("preview sizing rejects invalid image dimensions and terminal bounds", () =
   }
 });
 
-test("rendering reserves rows and deletes the transient file after the consumer completes", async (t) => {
+
+test("gallery reserves rows before placement and removes every placement after dismissal", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "capture.png");
-  await writeFile(path, Uint8Array.of(0, 255, 127));
+  const images = ["first", "second"].map((name) => ({ path: join(directory, name), width: 400, height: 200 }));
+  for (const image of images) await writeFile(image.path, Uint8Array.of(1, 2, 3));
   let output = "";
-  await renderImagePreview({ path, width: 400, height: 200 }, 40, 20, async (text) => {
-    await access(path);
-    output = text;
+  await renderImageGallery(images, 40, 20, (text) => { output += text; }, "Return", async () => {
+    assert.equal((output.match(/\x1b_Ga=T/g) ?? []).length, 2);
+    assert.ok(output.includes("\r\n".repeat(10) + "\x1b[10A\x1b_Ga=T"));
+    assert.ok(output.endsWith("Return\r\n"));
+    assert.ok(!output.includes("a=d"));
+    for (const image of images) await access(image.path);
   });
-  assert.ok(output.startsWith("\x1b_Ga=T"));
-  assert.ok(output.endsWith("\x1b\\" + "\n".repeat(10)));
-  await assert.rejects(access(path), { code: "ENOENT" });
+  const ids = [...output.matchAll(/a=T[^;]+i=(\d+)/g)].map((match) => match[1]);
+  assert.equal(new Set(ids).size, 2);
+  for (const id of ids) assert.ok(output.includes(`a=d,d=I,i=${id},q=2`));
+  await deleteImagePreviews(images);
+  for (const image of images) await assert.rejects(access(image.path), { code: "ENOENT" });
 });
 
-test("rendering deletes the transient file when writing fails", async (t) => {
+test("gallery clears partial placements on output failure; caller can clean all files", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const image = { path: join(directory, "capture.png"), width: 1, height: 1 };
+  await writeFile(image.path, Uint8Array.of(1));
+  let cleanup = "";
+  await assert.rejects(renderImageGallery([image], 40, 20, (text) => {
+    if (text.includes("a=T")) throw new Error("Output failed");
+    cleanup += text;
+  }, "Return", async () => assert.fail("Must not wait after output failure")), /Output failed/);
+  assert.ok(cleanup.includes("a=d,d=I"));
+  await deleteImagePreviews([image]);
+  await assert.rejects(access(image.path), { code: "ENOENT" });
+});
+
+test("cleanup attempts later paths even when one deletion fails and tolerates missing files", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "capture.png");
   await writeFile(path, Uint8Array.of(1));
-  await assert.rejects(renderImagePreview({ path, width: 100, height: 100 }, 40, 20, async () => {
-    throw new Error("Output failed");
-  }), /Output failed/);
+  const images = [directory, join(directory, "missing"), path].map((path) => ({ path, width: 1, height: 1 }));
+  await assert.rejects(deleteImagePreviews(images));
   await assert.rejects(access(path), { code: "ENOENT" });
 });
 
-test("rendering deletes the transient file when generating fails", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "capture.png");
-  await writeFile(path, new Uint8Array());
-  await assert.rejects(renderImagePreview({ path, width: 100, height: 100 }, 40, 20, () => {
-    assert.fail("Should not write invalid data");
-  }), /empty/);
-  await assert.rejects(access(path), { code: "ENOENT" });
-});
-
-test("rendering cleans up after a read failure and tolerates an already missing file", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, "capture.png");
-  await symlink(join(directory, "missing.png"), path);
-  await assert.rejects(renderImagePreview({ path, width: 100, height: 100 }, 40, 20, () => {
-    assert.fail("Should not write unreadable data");
-  }), { code: "ENOENT" });
-  // Recreating the symlink proves the broken symlink itself was removed.
-  await symlink(join(directory, "missing.png"), path);
-  await rm(path);
-  await assert.rejects(renderImagePreview({ path, width: 100, height: 100 }, 40, 20, () => {}), { code: "ENOENT" });
-});
+for (const ending of ["key", "abort", "end", "error"] as const) {
+  test(`gallery input releases raw mode and listeners on ${ending}`, async () => {
+    const abort = new AbortController();
+    const stdin = Object.assign(new PassThrough(), {
+      isRaw: false,
+      setRawMode(raw: boolean) { this.isRaw = raw; return this; },
+      ref() { return this; },
+      unref() { return this; },
+    });
+    const waiting = waitForGalleryKey(stdin as unknown as NodeJS.ReadStream, abort.signal);
+    assert.equal(stdin.isRaw, true);
+    if (ending === "key") stdin.write("q\r");
+    else if (ending === "abort") abort.abort();
+    else if (ending === "end") stdin.end();
+    else stdin.emit("error", new Error("Input failed"));
+    if (ending === "error") await assert.rejects(waiting, /Input failed/);
+    else await waiting;
+    assert.equal(stdin.isRaw, false);
+    assert.equal(stdin.listenerCount("readable"), 0);
+    assert.equal(stdin.listenerCount("error"), 0);
+    assert.equal(stdin.read(), null);
+    stdin.destroy();
+  });
+}

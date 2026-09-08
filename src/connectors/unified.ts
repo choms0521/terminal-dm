@@ -5,8 +5,7 @@ import type {
   ChatSnapshot,
   ConnectorStatus,
   Conversation,
-  ImagePreviewSelector,
-  ImagePreviewResult,
+  ImageGalleryResult,
 } from "../domain.js";
 
 export interface ConnectorEntry {
@@ -75,10 +74,10 @@ export class UnifiedChatConnector extends EventEmitter implements ChatConnector 
     await connector.sendFile(paths);
   }
 
-  public async previewImage(selector: ImagePreviewSelector): Promise<ImagePreviewResult> {
+  public async previewImages(): Promise<ImageGalleryResult> {
     const { connector } = this.requireActive();
-    if (!connector.previewImage) return { unavailable: "connector-unsupported" };
-    return connector.previewImage(selector);
+    if (!connector.previewImages) return { unavailable: "connector-unsupported" };
+    return connector.previewImages();
   }
 
   public async loadOlderMessages(): Promise<number> {

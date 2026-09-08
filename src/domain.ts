@@ -42,14 +42,16 @@ export interface ChatMessage {
   timestamp?: string;
   edited?: boolean;
   replyTo?: MessageReference;
-  /** Position in the native image window, including messages outside the UI cache. */
-  previewIndex?: number;
-  previewImageCount?: number;
 }
 
-export type ImagePreviewSelector = "latest" | number;
-export type ImagePreviewResult =
-  | { path: string; width: number; height: number }
+export interface ImagePreview {
+  path: string;
+  width: number;
+  height: number;
+}
+
+export type ImageGalleryResult =
+  | { images: ImagePreview[] }
   | { unavailable: string };
 
 export interface ChatSnapshot {
@@ -83,8 +85,8 @@ export interface ChatConnector {
   openConversation(id: string): Promise<void>;
   sendMessage(text: string): Promise<void>;
   sendFile?(paths: string[]): Promise<void>;
-  /** The caller must delete a returned temporary PNG after consuming it. */
-  previewImage?(selector: ImagePreviewSelector): Promise<ImagePreviewResult>;
+  /** The caller must delete every returned temporary PNG after consuming it. */
+  previewImages?(): Promise<ImageGalleryResult>;
   on<K extends keyof ConnectorEvents>(
     event: K,
     listener: (...args: ConnectorEvents[K]) => void,

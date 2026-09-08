@@ -13,7 +13,7 @@ export interface SlashCommand {
 
 const COMMANDS: Array<Omit<SlashCommand, "description"> & { descriptions: Record<AppLanguage, string> }> = [
   { name: "help", aliases: ["h"], descriptions: { ko: "명령과 단축키 보기", en: "Show commands and shortcuts" }, usage: "/help" },
-  { name: "preview", aliases: ["p"], descriptions: { ko: "최근 또는 선택한 이미지 미리보기", en: "Preview the latest or selected image" }, usage: "/preview [select|latest]" },
+  { name: "preview", aliases: ["p"], descriptions: { ko: "화면에 보이는 이미지 갤러리", en: "Preview all visible images" }, usage: "/preview" },
   { name: "open", aliases: ["o"], descriptions: { ko: "이름으로 대화방 열기", en: "Open a conversation by name" }, usage: "/open <name>" },
   { name: "file", aliases: ["f", "send"], descriptions: { ko: "파일 전송 (KakaoTalk)", en: "Send a file (KakaoTalk)" }, usage: "/file <path> [<path> …]" },
   {
