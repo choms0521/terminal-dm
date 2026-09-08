@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { PassThrough } from "node:stream";
 
 import {
   createGalleryInput,
+  MAX_UPSCALE,
   generateKittyImage,
   getPreviewSize,
   getTerminalImageCapability,
@@ -31,6 +33,8 @@ test("Kitty image sets PNG transfer, quiet mode, cursor policy, and dimensions",
     "\x1b_Ga=T,f=100,t=d,q=2,C=1,c=40,r=10,m=0;AP9/\x1b\\",
   );
   assert.match(generateKittyImage(Uint8Array.of(1), { columns: 20 }), /c=20,m=0;/);
+  assert.equal(generateKittyImage(Uint8Array.of(1), { id: 12 }),
+    "\x1b_Ga=T,f=100,t=d,q=2,C=1,i=12,m=0;AQ==\x1b\\");
 });
 
 test("Kitty base64 chunks round-trip binary data on and across the 4096-byte boundary", () => {
@@ -76,6 +80,7 @@ test("preview sizing rejects invalid image dimensions and terminal bounds", () =
 
 
 test("gallery reserves rows before placement and removes every placement after dismissal", async (t) => {
+  t.mock.method(childProcess, "execFile", () => assert.fail("No resampling without cell pixels"));
   const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const images = ["first", "second"].map((name) => ({ path: join(directory, name), width: 400, height: 200 }));
@@ -146,9 +151,12 @@ for (const ending of ["key", "abort", "end", "error"] as const) {
 }
 
 
-test("small previews stay within their native cell footprint, including subcell crops", () => {
+test("small previews upscale to the native pixel cap, including a one-cell minimum", () => {
+  assert.equal(MAX_UPSCALE, 2.0);
   assert.deepEqual(getPreviewSize(130, 302, 40, 40, { width: 10, height: 20 }),
-    { columns: 13, rows: 16 });
+    { columns: 26, rows: 30 });
+  assert.deepEqual(getPreviewSize(130, 302, 20, 40, { width: 10, height: 20 }),
+    { columns: 20, rows: 23 });
   assert.deepEqual(getPreviewSize(3, 7, 40, 40, { width: 10, height: 20 }),
     { columns: 1, rows: 1 });
 });
@@ -166,10 +174,17 @@ test("preview sizing preserves pixel aspect ratio for nonstandard cells within c
   assert.deepEqual(size, { columns: 40, rows: 16 });
   assert.equal(size.columns * cells.width / (size.rows * cells.height), 900 / 600);
   const rounded = getPreviewSize(130, 302, 40, 40, cells);
-  assert.ok(rounded.columns * cells.width >= 130);
-  assert.ok(rounded.columns * cells.width < 130 + cells.width);
-  assert.ok(rounded.rows * cells.height >= 302);
-  assert.ok(rounded.rows * cells.height < 302 + cells.height);
+  assert.deepEqual(getPreviewSize(90, 60, 40, 20, cells), { columns: 20, rows: 8 });
+  for (const [width, height] of [[130, 302], [4001, 2003]]) {
+    const size = getPreviewSize(width!, height!, 40, 40, cells);
+    const scale = Math.min(MAX_UPSCALE, 40 * cells.width / width!, 40 * cells.height / height!);
+    assert.ok(size.columns * cells.width <= width! * scale);
+    assert.ok(size.columns * cells.width > width! * scale - cells.width);
+    assert.ok(size.rows * cells.height <= height! * scale);
+    assert.ok(size.rows * cells.height > height! * scale - cells.height);
+  }
+  assert.ok(rounded.columns * cells.width > 130);
+  assert.ok(rounded.rows * cells.height > 302);
 });
 
 test("missing cell size retains legacy sizing and invalid explicit cell sizes are rejected", () => {
@@ -287,18 +302,91 @@ for (const ending of ["abort", "end", "error", "output"] as const) {
   });
 }
 
-test("gallery reserves the smaller native row count before placement", async (t) => {
+test("gallery retains cell scaling and bounded rows when resampling fails", async (t) => {
+  t.mock.method(childProcess, "execFile", (_file: string, _args: string[], callback: (error: Error) => void) => {
+    callback(new Error("sips unavailable"));
+  });
   const directory = await mkdtemp(join(tmpdir(), "tdm-preview-native-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const image = { path: join(directory, "capture.png"), width: 130, height: 302 };
   await writeFile(image.path, Uint8Array.of(1));
   let output = "";
   await renderImageGallery([image], 40, 40, (text) => { output += text; }, "Return", async () => {
-    assert.ok(output.includes("\r\n".repeat(16) + "\x1b[16A\x1b_Ga=T"));
-    assert.match(output, /c=13,r=16,/);
-    assert.ok(output.endsWith("\x1b[16B\r\nReturn\r\n"));
+    assert.ok(output.includes("\r\n".repeat(30) + "\x1b[30A\x1b_Ga=T"));
+    assert.match(output, /c=26,r=30,/);
+    assert.ok(output.endsWith("\x1b[30B\r\nReturn\r\n"));
   }, { width: 10, height: 20 });
 });
+
+test("gallery places an already matching PNG at native size without invoking sips", async (t) => {
+  t.mock.method(childProcess, "execFile", () => assert.fail("Native pixels need no resampling"));
+  const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const image = { path: join(directory, "capture.png"), width: 400, height: 200 };
+  await writeFile(image.path, Uint8Array.of(1, 2, 3));
+  let output = "";
+  await renderImageGallery([image], 40, 10, (text) => { output += text; }, "Return", async () => {},
+    { width: 10, height: 20 });
+  const header = /\x1b_G(a=T[^;]+);/.exec(output)![1]!;
+  assert.doesNotMatch(header, /(?:^|,)[cr]=/);
+  assert.match(output, /;AQID\x1b\\/);
+});
+
+for (const scenario of ["upscale", "downscale", "process failure", "spawn failure", "missing output",
+  "empty output", "placement failure", "dismissal failure", "cleanup output failure"] as const) {
+  test(`gallery resampling handles ${scenario} and cleans its private temp directory`, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "tdm-preview-test-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const downscale = scenario === "downscale";
+    const image = {
+      path: join(directory, "capture with spaces;$(literal).png"),
+      width: downscale ? 4000 : 100,
+      height: downscale ? 2000 : 100,
+    };
+    await writeFile(image.path, Uint8Array.of(1, 2, 3));
+    let resamplePath = "";
+    const processMock = t.mock.method(childProcess, "execFile",
+      (file: string, args: string[], callback: (error: Error | null) => void) => {
+        assert.equal(file, "/usr/bin/sips");
+        resamplePath = args[5]!;
+        assert.deepEqual(args, ["-z", "200", downscale ? "400" : "200", image.path, "--out", resamplePath]);
+        assert.equal(dirname(dirname(resamplePath)), tmpdir());
+        assert.match(resamplePath, /tdm-preview-resample-[^/]+\/preview\.png$/);
+        if (scenario === "spawn failure") throw new Error("Spawn failed");
+        void (async () => {
+          if (scenario !== "missing output") {
+            await writeFile(resamplePath, scenario === "empty output" ? new Uint8Array() : Uint8Array.of(4, 5, 6));
+          }
+          callback(scenario === "process failure" ? new Error("sips failed") : null);
+        })().catch(callback);
+      });
+    let output = "";
+    const render = renderImageGallery([image], 40, 20, (text) => {
+      if (scenario === "placement failure" && text.includes("a=T")) throw new Error("Placement failed");
+      if (scenario === "cleanup output failure" && text.includes("a=d")) throw new Error("Cleanup output failed");
+      output += text;
+    }, "Return", async () => {
+      await access(dirname(resamplePath));
+      if (scenario === "dismissal failure") throw new Error("Dismissal failed");
+    }, { width: 10, height: 20 });
+    if (["placement failure", "dismissal failure", "cleanup output failure"].includes(scenario)) {
+      await assert.rejects(render, /failed/);
+    } else {
+      await render;
+      const header = /\x1b_G(a=T[^;]+);/.exec(output)![1]!;
+      if (["process failure", "spawn failure", "missing output", "empty output"].includes(scenario)) {
+        assert.match(header, /c=20,r=10,/);
+        assert.match(output, /;AQID\x1b\\/);
+      } else {
+        assert.doesNotMatch(header, /(?:^|,)[cr]=/);
+        assert.match(output, /;BAUG\x1b\\/);
+      }
+    }
+    assert.equal(processMock.mock.callCount(), 1);
+    await assert.rejects(access(dirname(resamplePath)), { code: "ENOENT" });
+    await access(image.path);
+  });
+}
 
 
 test("malformed reports preserve a dismissal key in the same chunk", async () => {

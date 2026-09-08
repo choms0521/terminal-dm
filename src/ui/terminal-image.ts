@@ -1,6 +1,11 @@
-import { readFile, unlink } from "node:fs/promises";
+import childProcess from "node:child_process";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { ImagePreview } from "../domain.js";
+
+export const MAX_UPSCALE = 2.0;
 
 export function getTerminalImageCapability(env: {
   TERM?: string;
@@ -20,21 +25,22 @@ function positiveInteger(value: number, name: string): void {
 
 export function generateKittyImage(
   png: Uint8Array,
-  options: { columns: number; rows?: number; id?: number },
+  options: { columns?: number; rows?: number; id?: number },
 ): string {
-  positiveInteger(options.columns, "columns");
+  if (options.columns !== undefined) positiveInteger(options.columns, "columns");
   if (options.rows !== undefined) positiveInteger(options.rows, "rows");
   if (options.id !== undefined) positiveInteger(options.id, "id");
   if (png.byteLength === 0) throw new RangeError("Image data must not be empty");
 
   const encoded = Buffer.from(png).toString("base64");
-  const dimensions = `c=${options.columns}${options.rows === undefined ? "" : `,r=${options.rows}`}`;
+  // Omitting both dimensions places the PNG at its native pixel size.
+  const dimensions = `${options.columns === undefined ? "" : `c=${options.columns},`}${options.rows === undefined ? "" : `r=${options.rows},`}`;
   const packets: string[] = [];
   // The protocol limits each base64 payload to 4096 ASCII bytes.
   for (let offset = 0; offset < encoded.length; offset += 4096) {
     const chunk = encoded.slice(offset, offset + 4096);
     const more = offset + chunk.length < encoded.length ? 1 : 0;
-    const header = offset === 0 ? `a=T,f=100,t=d,q=2,C=1,${dimensions},${options.id === undefined ? "" : `i=${options.id},`}` : "";
+    const header = offset === 0 ? `a=T,f=100,t=d,q=2,C=1,${dimensions}${options.id === undefined ? "" : `i=${options.id},`}` : "";
     packets.push(`\x1b_G${header}m=${more};${chunk}\x1b\\`);
   }
   return packets.join("");
@@ -55,7 +61,7 @@ export async function deleteImagePreviews(images: readonly ImagePreview[]): Prom
 // images, without deleting graphics that belong to another terminal program.
 let nextGalleryImageId = 0x54440000;
 
-/** Caller owns the PNG files; this helper owns only the terminal placements. */
+/** Caller owns source PNGs; this helper owns resampling files and placements. */
 export async function renderImageGallery(
   images: readonly ImagePreview[],
   maxColumns: number,
@@ -66,14 +72,40 @@ export async function renderImageGallery(
   cellSize?: TerminalCellSize,
 ): Promise<void> {
   const ids: number[] = [];
+  const tempDirectories: string[] = [];
   try {
     await write("\x1b[2J\x1b[H");
     for (const [index, image] of images.entries()) {
-      const png = await readFile(image.path);
+      let png = await readFile(image.path);
       const size = getPreviewSize(image.width, image.height, maxColumns, maxRows, cellSize);
+      let nativePlacement = false;
+      if (cellSize) {
+        const targetWidth = size.columns * cellSize.width;
+        const targetHeight = size.rows * cellSize.height;
+        nativePlacement = targetWidth === image.width && targetHeight === image.height;
+        if (!nativePlacement) {
+          try {
+            const directory = await mkdtemp(join(tmpdir(), "tdm-preview-resample-"));
+            tempDirectories.push(directory);
+            const outputPath = join(directory, "preview.png");
+            await new Promise<void>((resolve, reject) => {
+              childProcess.execFile("/usr/bin/sips", [
+                "-z", String(targetHeight), String(targetWidth), image.path, "--out", outputPath,
+              ], (error) => { if (error) reject(error); else resolve(); });
+            });
+            const resampled = await readFile(outputPath);
+            if (resampled.byteLength > 0) {
+              png = resampled;
+              nativePlacement = true;
+            }
+          } catch {
+            // A missing tool or failed conversion retains terminal cell scaling.
+          }
+        }
+      }
       const id = nextGalleryImageId++;
       ids.push(id);
-      const sequence = generateKittyImage(png, { ...size, id });
+      const sequence = generateKittyImage(png, nativePlacement ? { id } : { ...size, id });
       // Reserve space BEFORE placement: with C=1 a placement near the bottom
       // can be clipped. Scrolling first and moving back up gives it full room.
       await write(`${index + 1}/${images.length}\r\n${"\r\n".repeat(size.rows)}\x1b[${size.rows}A${sequence}\x1b[${size.rows}B\r\n`);
@@ -81,7 +113,11 @@ export async function renderImageGallery(
     await write(`${hint}\r\n`);
     await waitForKey();
   } finally {
-    await write(ids.map((id) => `\x1b_Ga=d,d=I,i=${id},q=2\x1b\\`).join("") + "\x1b[2J\x1b[H");
+    try {
+      await write(ids.map((id) => `\x1b_Ga=d,d=I,i=${id},q=2\x1b\\`).join("") + "\x1b[2J\x1b[H");
+    } finally {
+      await Promise.all(tempDirectories.map((directory) => rm(directory, { recursive: true, force: true })));
+    }
   }
 }
 
@@ -234,17 +270,13 @@ export function getPreviewSize(
   if (cellSize) {
     positiveInteger(cellSize.width, "cellSize.width");
     positiveInteger(cellSize.height, "cellSize.height");
-    const nativeCols = Math.ceil(width / cellSize.width);
-    const nativeRows = Math.ceil(height / cellSize.height);
-    const columnLimit = Math.min(maxColumns, nativeCols);
-    const rowLimit = Math.min(maxRows, nativeRows);
-    // Scale in pixels, never above 1. Whole-cell rounding may add less than
-    // one cell on either axis, but never exceeds the native cell footprint.
-    const scale = Math.min(1, columnLimit * cellSize.width / width,
-      rowLimit * cellSize.height / height);
+    const scale = Math.min(MAX_UPSCALE, maxColumns * cellSize.width / width,
+      maxRows * cellSize.height / height);
+    // Round down to keep the pixel footprint within the upscale cap. Aspect
+    // ratio is accurate within one cell; subcell images still need one cell.
     return {
-      columns: Math.min(columnLimit, Math.max(1, Math.ceil(width * scale / cellSize.width))),
-      rows: Math.min(rowLimit, Math.max(1, Math.ceil(height * scale / cellSize.height))),
+      columns: Math.min(maxColumns, Math.max(1, Math.floor(width * scale / cellSize.width))),
+      rows: Math.min(maxRows, Math.max(1, Math.floor(height * scale / cellSize.height))),
     };
   }
   // Without a cell report, retain the legacy two-to-one cell approximation.
