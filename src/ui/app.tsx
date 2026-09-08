@@ -9,7 +9,7 @@ import type { ChatConnector, ChatSnapshot, Conversation, ImagePreview } from "..
 import { formatMessagePreview, formatMessageText } from "../message-content.js";
 import { APP_VERSION } from "../version.js";
 import { getMessageWindow, getOlderMessageOffset } from "./message-window.js";
-import { deleteImagePreviews, getTerminalImageCapability, renderImageGallery, waitForGalleryKey } from "./terminal-image.js";
+import { createGalleryInput, deleteImagePreviews, getTerminalImageCapability, renderImageGallery } from "./terminal-image.js";
 import {
   filterSlashCommands,
   findSlashCommand,
@@ -878,15 +878,24 @@ export function App({
         leaveHistoryScreenImmediately();
         leaveCommandScreenImmediately();
         setViewMode("chat");
-        await renderImageGallery(images,
-          Math.max(1, Math.min(40, terminalSize.columns - 2)),
-          Math.max(1, terminalSize.rows - 4),
-          (sequence) => new Promise<void>((resolve, reject) => {
-            stdout.write(sequence, (error) => error ? reject(error) : resolve());
-          }),
-          copy.previewGalleryHint,
-          () => waitForGalleryKey(stdin, abort.signal),
-        );
+        const write = (sequence: string) => new Promise<void>((resolve, reject) => {
+          stdout.write(sequence, (error) => error ? reject(error) : resolve());
+        });
+        const input = createGalleryInput(stdin, abort.signal);
+        try {
+          const cellSize = await input.queryCellSize(write);
+          if (abort.signal.aborted) return;
+          await renderImageGallery(images,
+            Math.max(1, Math.min(40, terminalSize.columns - 2)),
+            Math.max(1, terminalSize.rows - 4),
+            write,
+            copy.previewGalleryHint,
+            () => input.waitForKey(),
+            cellSize,
+          );
+        } finally {
+          input.dispose();
+        }
       } finally {
         // Unmount already releases Ink's input. Resuming after it would attach
         // Ink's stdin listener again, so only a still-mounted app is resumed.
