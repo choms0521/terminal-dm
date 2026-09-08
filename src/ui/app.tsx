@@ -1,20 +1,22 @@
 import { basename } from "node:path";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Static, Text, useApp, useInput, useStdin, useStdout } from "ink";
 import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
 
-import type { ChatConnector, ChatSnapshot, Conversation } from "../domain.js";
+import type { ChatConnector, ChatSnapshot, Conversation, ImagePreview } from "../domain.js";
 import { formatMessagePreview, formatMessageText } from "../message-content.js";
 import { APP_VERSION } from "../version.js";
 import { getMessageWindow, getOlderMessageOffset } from "./message-window.js";
+import { deleteImagePreviews, getTerminalImageCapability, renderImageGallery, waitForGalleryKey } from "./terminal-image.js";
 import {
   filterSlashCommands,
   findSlashCommand,
   getSelectionWindow,
   getSlashCommands,
   looksLikeFilePathInput,
+  parseComposedMessage,
   parseSubmission,
   resolveFileToken,
   type SlashCommand,
@@ -91,11 +93,14 @@ export function App({
   onLanguageChange,
   onUpdate,
 }: AppProps) {
-  const { exit, suspendTerminal } = useApp();
+  const { exit, suspendTerminal, waitUntilRenderFlush } = useApp();
   const { stdout, write } = useStdout();
+  const { stdin } = useStdin();
   const terminalSize = useTerminalSize(stdout);
   const [snapshot, setSnapshot] = useState(connector.getSnapshot());
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const previewInProgress = useRef(false);
+  const previewAbort = useRef<AbortController | undefined>(undefined);
   const [commandIndex, setCommandIndex] = useState(0);
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
   const [conversationProvider, setConversationProvider] = useState<ConversationProvider>("instagram");
@@ -104,6 +109,8 @@ export function App({
   const [inputEpoch, setInputEpoch] = useState(0);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [previewNotice, setPreviewNotice] = useState<string>();
+  const [sendingComposedMessage, setSendingComposedMessage] = useState(false);
   const [updateInstalled, setUpdateInstalled] = useState(false);
   const [messagesHidden, setMessagesHidden] = useState(false);
   const [workspaceCleared, setWorkspaceCleared] = useState(false);
@@ -169,13 +176,15 @@ export function App({
   // must not reserve another terminal row or the footer leaves a blank line.
   const baseChromeRows = viewMode === "history" ? 5 : 6;
   const commandChromeRows = viewMode === "history" ? 8 : 9;
+  const visibleNotice = sendingComposedMessage ? copy.sendingComposedMessage : previewNotice;
+  const noticeRows = visibleNotice ? wrapTerminalLines(visibleNotice, Math.max(1, terminalSize.columns - 2)).length : 0;
   const mainHeight = Math.max(
     6,
     terminalSize.rows -
       (commandMode
         ? commandWindowSize + commandChromeRows + pathFooterReservedRows
         : baseChromeRows + pathFooterReservedRows) -
-      staticHeaderRows,
+      staticHeaderRows - noticeRows,
   );
   const visibleMessageCount = Math.max(1, mainHeight - 4);
   const messageContentWidth = Math.max(1, terminalSize.columns - 2);
@@ -293,6 +302,7 @@ export function App({
     connector.on("error", onError);
     void connector.start().catch(onError);
     return () => {
+      previewAbort.current?.abort();
       connector.off("snapshot", onSnapshot);
       connector.off("error", onError);
       void connector.stop();
@@ -353,6 +363,7 @@ export function App({
     // normal width-aware diff cannot erase characters that belonged to the
     // previous, wider frame, leaving duplicate borders and footers behind.
     const timer = setTimeout(() => {
+      if (previewInProgress.current) return;
       void (async () => {
         const suspension = await suspendTerminal();
         const alternateScreen =
@@ -392,6 +403,7 @@ export function App({
 
   useEffect(() => {
     setMessageOffset(0);
+    setPreviewNotice(undefined);
   }, [snapshot.activeConversationId]);
 
   const showError = (next: unknown): void => {
@@ -551,6 +563,7 @@ export function App({
       return;
     }
     if (key.escape) {
+      setPreviewNotice(undefined);
       if (commandMode) {
         leaveCommandScreenImmediately();
         setInput("");
@@ -592,6 +605,7 @@ export function App({
       }
       return;
     }
+    if (previewInProgress.current) return;
     if (viewMode === "theme" && key.upArrow) {
       setThemeIndex((index) => wrapSelectionIndex(index, -1, UI_THEMES.length));
       return;
@@ -735,7 +749,7 @@ export function App({
     ? 3 + Math.max(1, commandWindow.items.length)
     : 0;
   const chatChromeRows =
-    4 + footerRows + commandPanelRows + (error ? 1 : 0);
+    4 + footerRows + commandPanelRows + (error ? 1 : 0) + noticeRows;
   const chatSpacerHeight = Math.max(
     0,
     terminalSize.rows -
@@ -816,8 +830,96 @@ export function App({
     }
   };
 
+  const previewImages = async (): Promise<void> => {
+    if (previewInProgress.current) return;
+    if (!snapshot.activeConversationId || workspaceCleared) {
+      setPreviewNotice(copy.chooseConversationFirst);
+      return;
+    }
+    if (!stdout.isTTY || !stdin.isTTY || getTerminalImageCapability(process.env) !== "kitty") {
+      setPreviewNotice(copy.previewTerminalUnsupported);
+      return;
+    }
+    if (!connector.previewImages) {
+      setPreviewNotice(copy.previewUnsupported);
+      return;
+    }
+    previewInProgress.current = true;
+    const abort = new AbortController();
+    previewAbort.current = abort;
+    let images: ImagePreview[] = [];
+    setPreviewNotice(copy.previewCapturing);
+    try {
+      const result = await connector.previewImages();
+      if ("unavailable" in result) {
+        const notices: Record<string, string> = {
+          "no-image": copy.previewNoImage,
+          "not-visible": copy.previewNotVisible,
+          "permission-denied": copy.previewPermission,
+          "connector-unsupported": copy.previewUnsupported,
+          "no-conversation": copy.chooseConversationFirst,
+          busy: copy.previewBusy,
+        };
+        if (!abort.signal.aborted) setPreviewNotice(notices[result.unavailable] ?? copy.previewFailed);
+        return;
+      }
+      images = result.images;
+      if (abort.signal.aborted) return;
+      if (images.length === 0) {
+        setPreviewNotice(copy.previewNoImage);
+        return;
+      }
+      await waitUntilRenderFlush();
+      if (abort.signal.aborted) return;
+      // Ink owns neither input nor output until resume(). Keep the
+      // mounted app and connector subscriptions alive so chat state is retained.
+      const suspension = await suspendTerminal();
+      try {
+        leaveHistoryScreenImmediately();
+        leaveCommandScreenImmediately();
+        setViewMode("chat");
+        await renderImageGallery(images,
+          Math.max(1, Math.min(40, terminalSize.columns - 2)),
+          Math.max(1, terminalSize.rows - 4),
+          (sequence) => new Promise<void>((resolve, reject) => {
+            stdout.write(sequence, (error) => error ? reject(error) : resolve());
+          }),
+          copy.previewGalleryHint,
+          () => waitForGalleryKey(stdin, abort.signal),
+        );
+      } finally {
+        // Unmount already releases Ink's input. Resuming after it would attach
+        // Ink's stdin listener again, so only a still-mounted app is resumed.
+        if (!abort.signal.aborted) {
+          await suspension.resume();
+          // Ink redraws its live region; Static needs a fresh epoch to replay
+          // the transcript erased by the gallery, including new snapshots.
+          setTranscriptEpoch((epoch) => epoch + 1);
+          await waitUntilRenderFlush();
+        }
+      }
+      if (!abort.signal.aborted) setPreviewNotice(copy.previewShown);
+    } catch {
+      if (!abort.signal.aborted) setPreviewNotice(copy.previewFailed);
+    } finally {
+      try {
+        await deleteImagePreviews(images);
+      } finally {
+        previewInProgress.current = false;
+        previewAbort.current = undefined;
+      }
+    }
+  };
+
   const executeCommand = async (command: SlashCommand, args: string[]): Promise<void> => {
     switch (command.name) {
+      case "preview":
+        if (args.length > 0) {
+          setPreviewNotice(copy.previewUsage);
+          return;
+        }
+        await previewImages();
+        return;
       case "help":
         setNotice(
           slashCommands.map((item) => item.usage).join(" · ") +
@@ -968,14 +1070,46 @@ export function App({
   };
 
   const submit = (value: string): void => {
+    if (previewInProgress.current) return;
     const parsed = parseSubmission(value);
     if (parsed.kind === "empty") return;
 
+    const segments = parseComposedMessage(value);
     if (looksLikeFilePathInput(value)) {
       leaveCommandScreenImmediately();
       setInput("");
       setError(undefined);
       void sendFilePaths(value.trim()).catch(showError);
+      return;
+    }
+
+    const mixed = segments.some((segment) => segment.kind === "text")
+      && segments.some((segment) => segment.kind === "files");
+    // Existing commands retain priority; an absolute file path may also begin with /.
+    if (mixed && (parsed.kind !== "command"
+      || (!findSlashCommand(parsed.name) && segments[0]?.kind === "files"))) {
+      leaveCommandScreenImmediately();
+      setInput("");
+      setError(undefined);
+      if (!snapshot.activeConversationId || workspaceCleared) {
+        setNotice(copy.chooseConversationFirst);
+        return;
+      }
+      if (!connector.sendFile) {
+        showError(new Error("이 connector는 파일 전송을 지원하지 않습니다."));
+        return;
+      }
+      const sendFile = connector.sendFile.bind(connector);
+      setMessagesHidden(false);
+      setMessageOffset(0);
+      setViewMode("chat");
+      setSendingComposedMessage(true);
+      void (async () => {
+        for (const segment of segments) {
+          if (segment.kind === "text") await connector.sendMessage(segment.text);
+          else await sendFile(segment.paths);
+        }
+      })().catch(showError).finally(() => setSendingComposedMessage(false));
       return;
     }
 
@@ -1424,6 +1558,7 @@ export function App({
         </Text>
       )}
       {error && <Text color={theme.danger}>error: {error}</Text>}
+      {visibleNotice && <Text color={theme.muted} wrap="wrap">{visibleNotice}</Text>}
       </Box>
     </>
   );

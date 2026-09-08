@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  KakaoNativeConnector,
   normalizeKakaoField,
   reconcilePendingOwnMessages,
 } from "../src/connectors/kakao-native.js";
@@ -32,4 +33,23 @@ test("아직 화면에 나타나지 않은 내 메시지는 다음 조회까지 
 test("카카오 대화 필드의 탭과 줄바꿈을 일반 공백으로 정규화한다", () => {
   assert.equal(normalizeKakaoField("\tㅋㅋㅋㅋㅋㅋ\r\n · 어제  "), "ㅋㅋㅋㅋㅋㅋ · 어제");
   assert.equal(normalizeKakaoField("  황준혁\u00a0"), "황준혁");
+});
+
+
+test("gallery migration preserves repeated photo and sticker markers across message refreshes", async () => {
+  const connector = new KakaoNativeConnector();
+  const rawMessages = [
+    { sender: "Peer", text: "(사진)", kind: "image" },
+    { sender: "Peer", text: "(사진)", kind: "image" },
+    { sender: "Peer", text: "(이모티콘)", kind: "sticker" },
+  ];
+  Object.assign(connector, {
+    activeTitle: "room", activeConversationId: "room",
+    readBridge: { request: async (action: string) => action === "messages" ? rawMessages : [] },
+  });
+  await connector.refresh();
+  await connector.refresh();
+  const messages = connector.getSnapshot().messages;
+  assert.deepEqual(messages.map(({ kind, text }) => ({ kind, text })), rawMessages.map(({ kind, text }) => ({ kind, text })));
+  assert.equal(new Set(messages.map(({ id }) => id)).size, 3);
 });

@@ -278,11 +278,7 @@ final class KakaoAccessibility {
     guard let windowPosition = position(of: chatWindow), let windowSize = size(of: chatWindow) else {
       throw BridgeError.message("KakaoTalk 대화창 좌표를 읽지 못했습니다.")
     }
-    let scrollAreas = children(of: chatWindow).filter { role(of: $0) == kAXScrollAreaRole as String }
-    guard let messageTable = scrollAreas.first.flatMap({ area in
-      children(of: area).first(where: { role(of: $0) == kAXTableRole as String })
-    }) else { throw BridgeError.message("KakaoTalk 메시지 표를 찾지 못했습니다.") }
-    let rows = children(of: messageTable).filter { role(of: $0) == kAXRowRole as String }
+    let (_, _, rows) = try messageRows(in: chatWindow)
     let windowLimit = max(1, min(20, limit))
     // KakaoTalk gives photos, videos and large emoticons their own rows, but
     // those rows usually have no readable text area. Counting raw rows first
@@ -357,6 +353,148 @@ final class KakaoAccessibility {
       output.append(entry)
     }
     return output
+  }
+
+  private func messageRows(in chatWindow: AXUIElement) throws -> (AXUIElement, AXUIElement, [AXUIElement]) {
+    guard let scrollArea = children(of: chatWindow).first(where: { role(of: $0) == kAXScrollAreaRole as String }),
+          let table = children(of: scrollArea).first(where: { role(of: $0) == kAXTableRole as String }) else {
+      throw BridgeError.message("KakaoTalk 메시지 표를 찾지 못했습니다.")
+    }
+    return (scrollArea, table, children(of: table).filter { role(of: $0) == kAXRowRole as String })
+  }
+
+  // Include accessible image/sticker rows; the gallery filters by viewport.
+  private func imageRows(in rows: [AXUIElement]) -> [(row: AXUIElement, image: AXUIElement)] {
+    rows.compactMap { row in
+      guard readableMessageText(in: row) == nil,
+            let media = mediaMarker(in: row),
+            media.kind == "image" || media.kind == "sticker" else { return nil }
+      return (row, media.anchor)
+    }
+  }
+
+  private func screenRect(of element: AXUIElement) -> CGRect? {
+    guard let point = position(of: element), let dimensions = size(of: element),
+          point.x.isFinite, point.y.isFinite, dimensions.width.isFinite, dimensions.height.isFinite,
+          dimensions.width > 0, dimensions.height > 0 else { return nil }
+    return CGRect(origin: point, size: dimensions)
+  }
+
+  private func visibleImageRect(_ image: AXUIElement, in scrollArea: AXUIElement, window: AXUIElement) -> CGRect? {
+    guard let rect = screenRect(of: image)?.integral,
+          let viewport = screenRect(of: scrollArea), let windowRect = screenRect(of: window),
+          viewport.contains(rect), windowRect.contains(rect) else { return nil }
+    var displayCount: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 0 else { return nil }
+    var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+    guard CGGetActiveDisplayList(displayCount, &displays, &displayCount) == .success,
+          displays.prefix(Int(displayCount)).contains(where: { CGDisplayBounds($0).contains(rect) }) else { return nil }
+    return rect
+  }
+
+  func captureVisibleImages(windowTitle: String) -> [String: Any] {
+    guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
+      return ["unavailable": "permission-denied"]
+    }
+    do {
+      let chatWindow = try window(named: windowTitle)
+      let (scrollArea, _, rows) = try messageRows(in: chatWindow)
+      let bubbleRects = imageRows(in: rows).compactMap {
+        visibleImageRect($0.image, in: scrollArea, window: chatWindow)
+      }.sorted {
+        $0.minY == $1.minY ? $0.minX < $1.minX : $0.minY < $1.minY
+      }
+      guard !bubbleRects.isEmpty else { return ["images": [[String: Any]]()] }
+      guard let windowRect = screenRect(of: chatWindow),
+            let windowNumber = onScreenWindowID(pid: try runningApplication.processIdentifier, bounds: windowRect) else {
+        return ["unavailable": "not-visible"]
+      }
+
+      // Capture the window once, regardless of z-order, without activation or
+      // raising it. All gallery crops come from this same frame.
+      let windowShot = FileManager.default.temporaryDirectory.appendingPathComponent("terminal-dm-window-XXXXXX.png").path
+      var shotBuffer = Array(windowShot.utf8CString)
+      let shotDescriptor = mkstemps(&shotBuffer, 4)
+      guard shotDescriptor >= 0 else { return ["unavailable": "capture-failed"] }
+      close(shotDescriptor)
+      let shotPath = String(cString: shotBuffer)
+      defer { try? FileManager.default.removeItem(atPath: shotPath) }
+
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+      process.arguments = ["-x", "-o", "-l", "\(windowNumber)", shotPath]
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      try process.run()
+      process.waitUntilExit()
+      guard process.terminationStatus == 0,
+            let windowData = try? Data(contentsOf: URL(fileURLWithPath: shotPath)),
+            let windowBitmap = NSBitmapImageRep(data: windowData),
+            let windowImage = windowBitmap.cgImage,
+            windowImage.width > 0, windowRect.width > 0 else {
+        return ["unavailable": CGPreflightScreenCaptureAccess() ? "capture-failed" : "permission-denied"]
+      }
+
+      var images: [[String: Any]] = []
+      var cropPaths: [String] = []
+      var transferred = false
+      defer {
+        if !transferred {
+          for path in cropPaths { try? FileManager.default.removeItem(atPath: path) }
+        }
+      }
+      // The shot's origin is the window's top-left. Convert point offsets into
+      // pixels using the same scale for every crop, then clamp to the shot.
+      let scale = CGFloat(windowImage.width) / windowRect.width
+      let imageBounds = CGRect(x: 0, y: 0, width: windowImage.width, height: windowImage.height)
+      for bubbleRect in bubbleRects {
+        let cropRect = CGRect(
+          x: ((bubbleRect.minX - windowRect.minX) * scale).rounded(.down),
+          y: ((bubbleRect.minY - windowRect.minY) * scale).rounded(.down),
+          width: (bubbleRect.width * scale).rounded(.toNearestOrAwayFromZero),
+          height: (bubbleRect.height * scale).rounded(.toNearestOrAwayFromZero))
+          .intersection(imageBounds)
+        guard !cropRect.isNull, cropRect.width > 0, cropRect.height > 0,
+              let cropped = windowImage.cropping(to: cropRect),
+              let pngData = NSBitmapImageRep(cgImage: cropped).representation(using: .png, properties: [:]) else {
+          return ["unavailable": "capture-failed"]
+        }
+
+        // Each crop uses a unique mode-0600 file. Transfer ownership to the UI
+        // only after the complete gallery succeeds; failures remove all crops.
+        let template = FileManager.default.temporaryDirectory.appendingPathComponent("terminal-dm-preview-XXXXXX.png").path
+        var pathBuffer = Array(template.utf8CString)
+        let descriptor = mkstemps(&pathBuffer, 4)
+        guard descriptor >= 0 else { return ["unavailable": "capture-failed"] }
+        close(descriptor)
+        let path = String(cString: pathBuffer)
+        cropPaths.append(path)
+        try pngData.write(to: URL(fileURLWithPath: path))
+        images.append(["path": path, "width": cropped.width, "height": cropped.height])
+      }
+      transferred = true
+      return ["images": images]
+    } catch {
+      return ["unavailable": "capture-failed"]
+    }
+  }
+
+  // Finds the on-screen window id for the app process whose bounds match the
+  // given screen rect, so the window can be captured directly by id.
+  private func onScreenWindowID(pid: pid_t, bounds: CGRect) -> CGWindowID? {
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    for info in list {
+      guard let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner == pid,
+            let box = info[kCGWindowBounds as String] as? [String: CGFloat],
+            let number = info[kCGWindowNumber as String] as? CGWindowID else { continue }
+      let x = box["X"] ?? .nan, y = box["Y"] ?? .nan
+      let w = box["Width"] ?? 0, h = box["Height"] ?? 0
+      if abs(x - bounds.minX) < 3, abs(y - bounds.minY) < 3,
+         abs(w - bounds.width) < 3, abs(h - bounds.height) < 3 {
+        return number
+      }
+    }
+    return nil
   }
 
   // Photos, videos and file attachments have their own rows with no readable
@@ -719,6 +857,8 @@ while let line = readLine() {
     case "doubleClick": try kakao.doubleClick(x: command["x"] as? Double ?? 0, y: command["y"] as? Double ?? 0); respond(id: id, result: [:])
     case "waitForWindow": try kakao.waitForWindow(expectedTitle: command["title"] as? String ?? ""); respond(id: id, result: [:])
     case "messages": respond(id: id, result: try kakao.messages(windowTitle: command["title"] as? String ?? "", direction: command["direction"] as? String ?? "newer", limit: command["limit"] as? Int ?? 15))
+    case "captureVisibleImages":
+      respond(id: id, result: kakao.captureVisibleImages(windowTitle: command["title"] as? String ?? ""))
     case "prepareComposer": try kakao.prepareComposer(windowTitle: command["title"] as? String ?? ""); respond(id: id, result: [:])
     case "send": respond(id: id, result: try kakao.send(windowTitle: command["title"] as? String ?? "", text: command["text"] as? String ?? ""))
     case "sendFile":

@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { rm } from "node:fs/promises";
 import { promisify } from "node:util";
 
-import type { ChatConnector, ChatMessage, ChatSnapshot, Conversation } from "../domain.js";
+import type { ChatConnector, ChatMessage, ChatSnapshot, Conversation, ImageGalleryResult } from "../domain.js";
 import { mergeMessageWindows, normalizeMessage, type RawMessage } from "./instagram-dom.js";
 import { KakaoNativeBridge } from "./kakao-native-bridge.js";
 
@@ -42,6 +43,8 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
   private loadingOlder = false;
   private sending = false;
   private openingConversation = false;
+  private previewing = false;
+  private previewPromise?: Promise<ImageGalleryResult>;
   private stopped = false;
   private pendingOwnTexts: string[] = [];
   private snapshot: ChatSnapshot = {
@@ -92,10 +95,44 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = undefined;
     const refreshPromise = this.refreshPromise;
-    // Stop the bridge first so an Accessibility request cannot indefinitely
-    // delay shutdown after KakaoTalk itself has been closed.
-    await Promise.all([this.readBridge.stop(), this.actionBridge.stop()]);
+    // Cancel AX reads first: a capture may still be waiting for the read
+    // bridge, and shutdown must not wait forever for that traversal.
+    await this.readBridge.stop();
+    // Keep the action bridge alive until capture and disposal have finished.
+    await this.previewPromise?.catch(() => undefined);
+    await this.actionBridge.stop();
     await refreshPromise?.catch(() => undefined);
+  }
+
+  public async previewImages(): Promise<ImageGalleryResult> {
+    if (!this.activeTitle) return { unavailable: "no-conversation" };
+    if (this.stopped) return { unavailable: "not-visible" };
+    if (this.previewing || this.openingConversation || this.sending) return { unavailable: "busy" };
+    const title = this.activeTitle;
+    this.previewing = true;
+    // Track the full operation, including disposal, so stop() cannot finish
+    // before an abandoned gallery's temporary files have been removed.
+    this.previewPromise = (async (): Promise<ImageGalleryResult> => {
+      try {
+        // Finish the read bridge's viewport traversal before taking one shot.
+        await this.refreshPromise?.catch(() => undefined);
+        if (title !== this.activeTitle || this.stopped) return { unavailable: "not-visible" };
+        const result = await this.actionBridge.request<ImageGalleryResult>("captureVisibleImages", { title });
+        if ((this.stopped || title !== this.activeTitle) && "images" in result) {
+          await Promise.all(result.images.map((image) => rm(image.path, { force: true })));
+          return { unavailable: "not-visible" };
+        }
+        return result;
+      } catch {
+        return { unavailable: "capture-failed" };
+      }
+    })();
+    try {
+      return await this.previewPromise;
+    } finally {
+      this.previewing = false;
+      this.previewPromise = undefined;
+    }
   }
 
   public refresh(): Promise<void> {
@@ -233,7 +270,7 @@ export class KakaoNativeConnector extends EventEmitter implements ChatConnector 
   }
 
   private async performRefresh(): Promise<void> {
-    if (this.stopped || this.sending || this.openingConversation) return;
+    if (this.stopped || this.sending || this.openingConversation || this.previewing) return;
     try {
       let conversations = this.snapshot.conversations;
       if (

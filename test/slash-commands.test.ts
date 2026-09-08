@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -6,6 +8,7 @@ import {
   findSlashCommand,
   getSelectionWindow,
   looksLikeFilePathInput,
+  parseComposedMessage,
   parseSubmission,
   tokenizeFileArgs,
   wrapSelectionIndex,
@@ -13,6 +16,101 @@ import {
 
 const anyFile = () => true;
 const noFile = () => false;
+
+test("parseComposedMessage preserves text-only input", () => {
+  const text = String.raw`Don't change  "quoted text" or back\slashes`;
+  assert.deepEqual(parseComposedMessage(`  ${text}  `, anyFile), [
+    { kind: "text", text },
+  ]);
+});
+
+test("parseComposedMessage returns no segments for empty input", () => {
+  assert.deepEqual(parseComposedMessage("", anyFile), []);
+  assert.deepEqual(parseComposedMessage(" \n\t ", anyFile), []);
+});
+
+test("parseComposedMessage resolves and groups files-only input", () => {
+  assert.deepEqual(parseComposedMessage("/tmp/a.png ~/b.png ./c.png ../d.png", anyFile), [
+    {
+      kind: "files",
+      paths: ["/tmp/a.png", resolve(homedir(), "b.png"), resolve("c.png"), resolve("../d.png")],
+    },
+  ]);
+});
+
+test("parseComposedMessage preserves text-file-text order", () => {
+  assert.deepEqual(parseComposedMessage("안녕하세요 ~/x.png 이거   봐봐", anyFile), [
+    { kind: "text", text: "안녕하세요" },
+    { kind: "files", paths: [resolve(homedir(), "x.png")] },
+    { kind: "text", text: "이거 봐봐" },
+  ]);
+});
+
+test("parseComposedMessage groups consecutive images and text tokens", () => {
+  assert.deepEqual(parseComposedMessage("look   here ./a.png ./b.png then ./c.png", anyFile), [
+    { kind: "text", text: "look here" },
+    { kind: "files", paths: [resolve("a.png"), resolve("b.png")] },
+    { kind: "text", text: "then" },
+    { kind: "files", paths: [resolve("c.png")] },
+  ]);
+});
+
+test("parseComposedMessage honors the literal override without checking files", () => {
+  assert.deepEqual(parseComposedMessage('  //hello  "~/a.png"  ', () => {
+    assert.fail("Literal input must not check files");
+  }), [{ kind: "text", text: '/hello  "~/a.png"' }]);
+});
+
+test("parseComposedMessage leaves missing paths as text", () => {
+  assert.deepEqual(parseComposedMessage("look ~/missing.png ./missing.jpg", noFile), [
+    { kind: "text", text: "look ~/missing.png ./missing.jpg" },
+  ]);
+  assert.deepEqual(parseComposedMessage("./missing.png ./a.png ../missing.jpg", (path) => path === resolve("a.png")), [
+    { kind: "text", text: "./missing.png" },
+    { kind: "files", paths: [resolve("a.png")] },
+    { kind: "text", text: "../missing.jpg" },
+  ]);
+});
+
+test("parseComposedMessage requires a path prefix for every file token", () => {
+  const checked: string[] = [];
+  assert.deepEqual(parseComposedMessage("a.png ./b.png c.png", (path) => {
+    checked.push(path);
+    return true;
+  }), [
+    { kind: "text", text: "a.png" },
+    { kind: "files", paths: [resolve("b.png")] },
+    { kind: "text", text: "c.png" },
+  ]);
+  assert.deepEqual(checked, [resolve("b.png")]);
+});
+
+test("parseComposedMessage supports quoted and escaped file paths", () => {
+  assert.deepEqual(parseComposedMessage(String.raw`look "~/my photo.png" './other photo.png' ./escaped\ photo.png now`, anyFile), [
+    { kind: "text", text: "look" },
+    {
+      kind: "files",
+      paths: [resolve(homedir(), "my photo.png"), resolve("other photo.png"), resolve("escaped photo.png")],
+    },
+    { kind: "text", text: "now" },
+  ]);
+});
+
+test("parseComposedMessage preserves contractions before a file", () => {
+  assert.deepEqual(parseComposedMessage("don't miss ~/x.png please", anyFile), [
+    { kind: "text", text: "don't miss" },
+    { kind: "files", paths: [resolve(homedir(), "x.png")] },
+    { kind: "text", text: "please" },
+  ]);
+});
+
+test("parseComposedMessage preserves contractions after a file", () => {
+  assert.deepEqual(parseComposedMessage("here ~/x.png don't miss it", anyFile), [
+    { kind: "text", text: "here" },
+    { kind: "files", paths: [resolve(homedir(), "x.png")] },
+    { kind: "text", text: "don't miss it" },
+  ]);
+});
 
 test("slash command를 파싱한다", () => {
   assert.deepEqual(parseSubmission("/open 김태현"), {

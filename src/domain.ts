@@ -44,6 +44,16 @@ export interface ChatMessage {
   replyTo?: MessageReference;
 }
 
+export interface ImagePreview {
+  path: string;
+  width: number;
+  height: number;
+}
+
+export type ImageGalleryResult =
+  | { images: ImagePreview[] }
+  | { unavailable: string };
+
 export interface ChatSnapshot {
   state: ConnectionState;
   conversations: Conversation[];
@@ -75,6 +85,8 @@ export interface ChatConnector {
   openConversation(id: string): Promise<void>;
   sendMessage(text: string): Promise<void>;
   sendFile?(paths: string[]): Promise<void>;
+  /** The caller must delete every returned temporary PNG after consuming it. */
+  previewImages?(): Promise<ImageGalleryResult>;
   on<K extends keyof ConnectorEvents>(
     event: K,
     listener: (...args: ConnectorEvents[K]) => void,
